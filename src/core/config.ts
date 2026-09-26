@@ -1,4 +1,17 @@
+import fs from "node:fs";
+import dotenv from "dotenv";
 import { z } from "zod";
+import { getEnvFilePath, isRunningUnderNodeTest } from "./paths.ts";
+
+// Ensure .env is loaded before parsing schema across CLI, TUI, and server modes
+if (!isRunningUnderNodeTest()) {
+  const envPath = getEnvFilePath();
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath, quiet: true });
+  } else {
+    dotenv.config({ quiet: true });
+  }
+}
 
 const envSchema = z
   .object({

@@ -1078,6 +1078,21 @@ export function getStealthScript(profile: FingerprintProfile): string {
           spoofedFunctions.add(window.performance.getEntriesByType);
         }
       } catch(e) {}
+
+      // --- Auto-resolve birthday compliance & eliminate false logout markers ---
+      try {
+        localStorage.removeItem("qwen_token_logged_out_marker");
+        const b = localStorage.getItem("qwen_account_birthday");
+        if (b) {
+          try {
+            const parsed = JSON.parse(b);
+            if (!parsed.birthday) {
+              parsed.birthday = "1995-06-15";
+              localStorage.setItem("qwen_account_birthday", JSON.stringify(parsed));
+            }
+          } catch {}
+        }
+      } catch(e) {}
     })();
   `;
 }

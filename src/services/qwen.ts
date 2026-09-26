@@ -908,17 +908,14 @@ export async function requestQwenTextInBrowser(
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
         try {
-          const doFetch = () =>
-            fetch(url, {
-              method,
-              credentials: "include",
-              headers,
-              body,
-              signal: controller.signal,
-              ...(referrer ? { referrer } : {}),
-            });
-
-          let response = await doFetch();
+          let response = await fetch(url, {
+            method,
+            credentials: "include",
+            headers,
+            body,
+            signal: controller.signal,
+            ...(referrer ? { referrer } : {}),
+          });
 
           // If 401 Unauthorized in browser, try silent in-page token refresh before giving up
           if (response.status === 401) {
@@ -938,7 +935,14 @@ export async function requestQwenTextInBrowser(
                     headers["authorization"] = `Bearer ${freshTok}`;
                     headers["Authorization"] = `Bearer ${freshTok}`;
                   }
-                  response = await doFetch();
+                  response = await fetch(url, {
+                    method,
+                    credentials: "include",
+                    headers,
+                    body,
+                    signal: controller.signal,
+                    ...(referrer ? { referrer } : {}),
+                  });
                 }
               }
             } catch {}

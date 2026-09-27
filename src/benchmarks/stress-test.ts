@@ -6,8 +6,9 @@
  * streaming vs non-streaming, account rotation, and error payloads.
  *
  * Usage:
- *   npx tsx scripts/stress-test.ts
- *   npx tsx scripts/stress-test.ts --count=100 --concurrency=2
+ *   npm run test:stress
+ *   npx tsx src/benchmarks/stress-test.ts
+ *   npx tsx src/benchmarks/stress-test.ts --count=100 --concurrency=2
  */
 
 import fs from "node:fs";
@@ -25,7 +26,7 @@ function parseArg(name: string, fallback: string): string {
   return fallback;
 }
 
-const TOTAL_REQUESTS = parseInt(parseArg("count", "100"), 10);
+const TOTAL_REQUESTS = parseInt(parseArg("count", "200"), 10);
 const CONCURRENCY = Math.max(1, parseInt(parseArg("concurrency", "2"), 10));
 const BASE_URL = parseArg("url", "http://127.0.0.1:7936/v1");
 const API_KEY = parseArg("key", process.env.API_KEY || "sk-qwenproxy-local");
@@ -159,6 +160,7 @@ const MODELS = ["qwen3.8-max", "qwen3.7-plus", "qwen3.8-omni-flash"];
 interface RequestRecord {
   index: number;
   reqId: string | null;
+  account: string | null;
   model: string;
   stream: boolean;
   prompt: string;
@@ -186,6 +188,7 @@ async function executeSingleRequest(
   let ttfbMs = 0;
   let outputText = "";
   let reqId: string | null = null;
+  let account: string | null = null;
   let timingHeader: string | null = null;
   let statusCode = 0;
   let errorMsg: string | null = null;
@@ -207,6 +210,7 @@ async function executeSingleRequest(
 
     statusCode = response.status;
     reqId = response.headers.get("x-request-id");
+    account = response.headers.get("x-qwenproxy-account");
     timingHeader = response.headers.get("x-qwenproxy-timing");
 
     if (stream) {
@@ -269,6 +273,7 @@ async function executeSingleRequest(
   return {
     index,
     reqId,
+    account,
     model,
     stream,
     prompt: prompt.slice(0, 100),
@@ -345,7 +350,7 @@ async function main() {
       else failureCount++;
 
       const statusTag = record.ok ? "✅ 200 OK" : `❌ ${record.status || "ERR"}`;
-      const logLine = `[${String(record.index).padStart(3, "0")}/${TOTAL_REQUESTS}] ${statusTag} | ${record.model} | TTFB: ${record.ttfbMs}ms | Total: ${record.totalMs}ms | ${record.outputChars} chars | ${record.tokensPerSec} t/s | req=${record.reqId || "none"}`;
+      const logLine = `[${String(record.index).padStart(3, "0")}/${TOTAL_REQUESTS}] ${statusTag} | ${record.model} | TTFB: ${record.ttfbMs}ms | Total: ${record.totalMs}ms | ${record.outputChars} chars | ${record.tokensPerSec} t/s | acct=${record.account || "auto"} | req=${record.reqId || "none"}`;
 
       console.log(logLine);
       fs.appendFileSync(liveLogFile, `${logLine}\n  Prompt: "${record.prompt}"\n  Preview: "${record.contentPreview}"\n  Error: ${record.error || "none"}\n\n`, "utf8");
@@ -371,6 +376,8 @@ async function main() {
   const totalChars = results.reduce((acc, r) => acc + r.outputChars, 0);
   const totalTokensEstimated = Math.round(totalChars / 4);
   const avgThroughput = totalBenchmarkMs > 0 ? Math.round((totalTokensEstimated / (totalBenchmarkMs / 1000)) * 10) / 10 : 0;
+
+  const accountsSet = Array.from(new Set(results.map((r) => r.account || "auto")));
 
   const summary = `
 ==================================================================
@@ -401,12 +408,23 @@ async function main() {
   P95:  ${p(ttfbTimes, 0.95)}ms
   Max:  ${max(ttfbTimes)}ms
 
+--- Distribuição por Conta (Rotação Real) ---
+${accountsSet
+  .map((acc) => {
+    const accReqs = results.filter((r) => (r.account || "auto") === acc);
+    const accOk = accReqs.filter((r) => r.ok).length;
+    const accAvg = avg(accReqs.map((r) => r.totalMs));
+    const pct = ((accReqs.length / TOTAL_REQUESTS) * 100).toFixed(1);
+    return `  • ${acc.padEnd(25)}: ${String(accReqs.length).padStart(3, " ")} reqs (${pct}%) | ${accOk} ok | Latência média: ${accAvg}ms`;
+  })
+  .join("\n")}
+
 --- Distribuição por Modelo ---
 ${MODELS.map((m) => {
   const modelReqs = results.filter((r) => r.model === m);
   const modelOk = modelReqs.filter((r) => r.ok).length;
   const modelAvg = avg(modelReqs.map((r) => r.totalMs));
-  return `  • ${m.padEnd(20)}: ${modelReqs.length} reqs | ${modelOk} ok | Latência média: ${modelAvg}ms`;
+  return `  • ${m.padEnd(20)}: ${String(modelReqs.length).padStart(3, " ")} reqs | ${modelOk} ok | Latência média: ${modelAvg}ms`;
 }).join("\n")}
 
 ==================================================================
@@ -415,8 +433,8 @@ ${MODELS.map((m) => {
   console.log(summary);
 
   // Write full reports to disk
-  const jsonReportPath = path.join(logDir, "stress-test-100-results.json");
-  const summaryReportPath = path.join(logDir, "stress-test-100-summary.txt");
+  const jsonReportPath = path.join(logDir, "stress-test-results.json");
+  const summaryReportPath = path.join(logDir, "stress-test-summary.txt");
 
   fs.writeFileSync(jsonReportPath, JSON.stringify(results, null, 2), "utf8");
   fs.writeFileSync(summaryReportPath, summary, "utf8");

@@ -31,7 +31,7 @@ if not exist ".env" (
 )
 
 REM O servidor já exibe o próprio banner; --silent oculta o cabeçalho do npm.
-call npm start --silent
+call npm start --silent -- %*
 if errorlevel 1 (
   echo.
   echo ❌ O servidor foi encerrado. Pressione qualquer tecla para fechar esta janela...

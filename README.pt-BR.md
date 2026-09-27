@@ -980,11 +980,13 @@ QwenProxy/
 A pasta `scripts/` contém atalhos para instalar, iniciar e atualizar o projeto sem digitar os comandos manualmente.
 
 
-| Script      | Windows               | Linux/macOS            | O que faz                                                                                    |
-| ----------- | --------------------- | ---------------------- | -------------------------------------------------------------------------------------------- |
-| Instalador  | `scripts\install.bat` | `./scripts/install.sh` | Verifica Node 22+, roda `npm install`, cria `.env` a partir de `.env.example` se não existir |
-| Iniciador   | `scripts\start.bat`   | `./scripts/start.sh`   | Verifica dependências e `.env`, inicia o servidor com `npm start`                            |
-| Atualizador | `scripts\update.bat`  | `./scripts/update.sh`  | `git pull` (se for repositório), `npm install` e `npx playwright install chromium`           |
+| Script         | Windows               | Linux/macOS            | O que faz                                                                                    |
+| -------------- | --------------------- | ---------------------- | -------------------------------------------------------------------------------------------- |
+| Instalador     | `scripts\install.bat` | `./scripts/install.sh` | Verifica Node 22+, roda `npm install`, cria `.env` a partir de `.env.example` se não existir |
+| Iniciador      | `scripts\start.bat`   | `./scripts/start.sh`   | Verifica dependências e `.env`, inicia o servidor com `npm start`                            |
+| Atualizador    | `scripts\update.bat`  | `./scripts/update.sh`  | `git pull` (se for repositório), `npm install` e `npx playwright install chromium`           |
+| Login          | `scripts\login.bat`   | `./scripts/login.sh`   | Abre navegador visual para autenticar contas no Qwen Web                                     |
+| Sincronizador  | `scripts\sync.bat`    | `./scripts/sync.sh`    | Sincroniza e configura automaticamente clientes de IA (Claude Code, Codex, Cursor, etc.)     |
 
 
 No Linux/macOS, dê permissão de execução na primeira vez:

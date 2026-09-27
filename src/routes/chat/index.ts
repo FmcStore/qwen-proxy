@@ -279,6 +279,7 @@ export async function chatCompletions(c: Context) {
     )) {
       c.header(name, value);
     }
+    c.header("X-QwenProxy-Account", streamResult.activeAccountLabel);
 
     // A full-context replay (account switch / missing thread parent) hides its
     // real cost behind the thread-native delta numbers: surface it explicitly

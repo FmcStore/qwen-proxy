@@ -800,10 +800,19 @@ async function withQwenBrowserPage<T>(
         (normalizedTargetPath !== null && currentPath !== normalizedTargetPath);
 
       if (needsNavigation) {
-        await page.goto(targetUrl, {
-          waitUntil: "domcontentloaded",
-          timeout: Math.min(config.timeouts.navigation, operationTimeoutMs),
-        });
+        try {
+          await page.goto(targetUrl, {
+            waitUntil: "domcontentloaded",
+            timeout: Math.min(config.timeouts.navigation, operationTimeoutMs),
+          });
+        } catch (err: any) {
+          // If navigation was aborted because page reached target origin or redirect finished, ignore benign abort
+          if (err?.message?.includes("ERR_ABORTED") && page.url().startsWith(targetOrigin)) {
+            // benign navigation interruption
+          } else {
+            throw err;
+          }
+        }
       }
 
       return fn(page);

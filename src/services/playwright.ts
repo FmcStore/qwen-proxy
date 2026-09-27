@@ -1737,10 +1737,19 @@ export async function initPlaywrightForAccount(
 
       if (restoredFromDb) {
         if (!acctPage.isClosed() && (acctPage.url() === "about:blank" || !acctPage.url().startsWith(qwenOrigin()))) {
-          void acctPage.goto(qwenUrl("/"), {
-            waitUntil: "domcontentloaded",
-            timeout: config.timeouts.navigation,
-          }).catch(() => {});
+          try {
+            await acctPage.goto(qwenUrl("/"), {
+              waitUntil: "domcontentloaded",
+              timeout: config.timeouts.navigation,
+            });
+            await sleep(300);
+          } catch (err: any) {
+            if (!err?.message?.includes("ERR_ABORTED")) {
+              console.warn(
+                `⚠️  [Playwright] Background navigation warning for ${maskEmail(account.email)}: ${err.message}`,
+              );
+            }
+          }
         }
         return;
       }
@@ -3238,9 +3247,9 @@ async function refreshHeadersInternal(
         }
       }
 
-      // Fast re-auth completion: if re-auth succeeded and required anti-bot tokens are already cached,
+      // Fast refresh completion: if required anti-bot tokens are already cached,
       // refresh cookies directly without running slow UI typing interception.
-      if (reauthExecuted && hasRequiredQwenHeaders(cache.headers)) {
+      if (hasRequiredQwenHeaders(cache.headers)) {
         const liveCookies = await page.context().cookies();
         if (liveCookies.some((c) => c.name === "token")) {
           const cookieStr = liveCookies.map((c) => `${c.name}=${c.value}`).join("; ");

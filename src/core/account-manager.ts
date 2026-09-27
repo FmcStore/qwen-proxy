@@ -50,7 +50,16 @@ export function markAccountRateLimited(
   reason?: string,
   options: { silent?: boolean } = {},
 ): void {
+  // If cooldown is explicitly 0 or negative, do not park the account.
+  if (cooldownMs !== undefined && cooldownMs <= 0) {
+    clearAccountCooldown(accountId);
+    return;
+  }
   const duration = cooldownMs ?? defaultCooldownDurationMs();
+  if (duration <= 0) {
+    clearAccountCooldown(accountId);
+    return;
+  }
   const until = Date.now() + duration;
   const cooldownReason = reason ?? "RateLimited";
 

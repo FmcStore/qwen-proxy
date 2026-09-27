@@ -68,6 +68,7 @@ import {
 import {
   getIncrementalDelta,
   isThinkingPhase,
+  isAnswerPhase,
   extractThinkingContent,
   formatThinkingSummaryContent,
   shouldSuppressStreamAbort,
@@ -470,7 +471,7 @@ export async function processNonStreamingResponse(
                   foundStr = true;
                 }
               }
-            } else if (delta.phase === "answer") {
+            } else if (isAnswerPhase(delta.phase)) {
               isThinkingChunk = false;
               if (delta.content !== undefined) {
                 const newContent = delta.content || "";
@@ -1436,13 +1437,19 @@ export async function processStreamingResponse(
 
         if (
           switchAccount &&
-          (policy.accountCooldownMs || policy.accountCooldownReason)
+          (policy.accountCooldownMs ?? 0) > 0
         ) {
           markAccountRateLimited(
             currentAccountId,
             policy.accountCooldownMs,
             policy.accountCooldownReason || "StreamRetry",
           );
+        }
+
+        if (policy.accountCooldownReason === "AuthExpired") {
+          import("../../services/playwright.ts")
+            .then(({ refreshAccountToken }) => refreshAccountToken(currentAccountId))
+            .catch(() => {});
         }
 
         retryContext.releaseAccountLease?.();
@@ -1776,7 +1783,7 @@ export async function processStreamingResponse(
               // "phase":"answer"} delta and NO trailing [DONE]. Treat it as
               // the terminal event so we don't wait on the keep-alive
               // connection to close (up to the 60s/10min idle timeout).
-              if (delta.phase === "answer" && delta.status === "finished") {
+              if (isAnswerPhase(delta.phase) && delta.status === "finished") {
                 upstreamDone = true;
                 if (!clientDisconnected) flushWrites();
                 break; // Exit the for loop; the while check leaves the read loop
@@ -1800,7 +1807,7 @@ export async function processStreamingResponse(
                     foundStr = true;
                   }
                 }
-              } else if (delta.phase === "answer") {
+              } else if (isAnswerPhase(delta.phase)) {
                 isThinkingChunk = false;
                 if (delta.content !== undefined) {
                   const newContent = delta.content || "";
@@ -2290,7 +2297,7 @@ export async function processStreamingResponse(
               // The retry stream may also terminate with an answer-finished
               // delta when upstream sends no [DONE]. Leave the read loop
               // immediately so we don't stall on the keep-alive connection.
-              if (delta.phase === "answer" && delta.status === "finished") {
+              if (isAnswerPhase(delta.phase) && delta.status === "finished") {
                 upstreamDone = true;
                 break retryReadLoop;
               }

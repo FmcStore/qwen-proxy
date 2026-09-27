@@ -11,6 +11,7 @@ export interface ServerLogMessage {
   time: string;
   level: "INFO" | "WARN" | "ERROR";
   message: string;
+  _ts?: number;
 }
 
 const MAX_LOG_HISTORY = 2000;
@@ -80,15 +81,21 @@ export function recordServerLog(level: "INFO" | "WARN" | "ERROR", text: string):
       .replace(/([\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}]\uFE0F?)\s{2,}/gu, "$1 ");
     if (!line) continue;
 
-    // Prevent identical duplicate logs within the same second window
+    // Prevent identical duplicate logs within the same second or 1.5s window
+    const now = Date.now();
     const isDuplicate = logHistory
       .slice(-10)
-      .some((entry) => entry.time === time && entry.level === level && entry.message === line);
+      .some(
+        (entry) =>
+          (entry.time === time || (entry._ts && now - entry._ts < 1500)) &&
+          entry.level === level &&
+          entry.message === line,
+      );
     if (isDuplicate) {
       continue;
     }
 
-    const entry: ServerLogMessage = { time, level, message: line };
+    const entry: ServerLogMessage = { time, level, message: line, _ts: now };
     logHistory.push(entry);
     if (logHistory.length > MAX_LOG_HISTORY) {
       logHistory.shift();

@@ -2763,10 +2763,19 @@ async function createQwenStreamInternal(
   };
 
   // A new logical chat session should reuse the warmed header cache when available.
-  // Header recapture is much more expensive and should be reserved for real refresh/login cases,
-  // not for ordinary first prompts that simply need parent_id reset.
+  // Proactively check if the access token is expiring soon (<3m) and refresh quietly before starting.
+  let forceRefresh = options?.forceNewChat === true;
+  if (!forceRefresh && accountId) {
+    try {
+      const basic = await getBasicHeaders(accountId);
+      if (isTokenExpiringSoon(basic.cookie, 3)) {
+        forceRefresh = true;
+      }
+    } catch {}
+  }
+
   const captured = await getQwenHeaders(
-    options?.forceNewChat === true,
+    forceRefresh,
     accountId,
   );
   ensureNotAborted();
@@ -2782,7 +2791,7 @@ async function createQwenStreamInternal(
   if (options && "chatSessionId" in options) {
     if (options.chatSessionId === null || options.chatSessionId === "") {
       const acquired = await acquireNewQwenChatSession(
-        headers,
+        activeHeaders,
         model,
         accountId,
         options?.chatMode ?? "thread",
@@ -2790,6 +2799,10 @@ async function createQwenStreamInternal(
       chatSessionId = acquired.chatId;
       leasedWarmChat = acquired.leasedFromPool;
       createdNewChat = true;
+      try {
+        const fresh = await getQwenHeaders(false, accountId);
+        activeHeaders = fresh.headers;
+      } catch {}
     } else {
       chatSessionId = options.chatSessionId;
     }
@@ -2797,7 +2810,7 @@ async function createQwenStreamInternal(
     chatSessionId = captured.chatSessionId;
     if (!chatSessionId) {
       const acquired = await acquireNewQwenChatSession(
-        headers,
+        activeHeaders,
         model,
         accountId,
         options?.chatMode ?? "thread",
@@ -2805,6 +2818,10 @@ async function createQwenStreamInternal(
       chatSessionId = acquired.chatId;
       leasedWarmChat = acquired.leasedFromPool;
       createdNewChat = true;
+      try {
+        const fresh = await getQwenHeaders(false, accountId);
+        activeHeaders = fresh.headers;
+      } catch {}
     }
   }
 

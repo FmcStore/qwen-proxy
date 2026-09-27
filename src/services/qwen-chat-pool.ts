@@ -71,18 +71,22 @@ async function createQwenChatSession(
       } catch {}
     }
 
-    if (
-      json?.data?.code === "Unauthorized" ||
-      json?.code === "Unauthorized" ||
+    const isUnauthorized =
+      json?.data?.code?.toLowerCase() === "unauthorized" ||
+      json?.code?.toLowerCase() === "unauthorized" ||
       rawLower.includes("unauthorized") ||
-      rawLower.includes("permission to access")
-    ) {
+      rawLower.includes("permission to access") ||
+      rawLower.includes("token has expired") ||
+      rawLower.includes("401");
+
+    if (isUnauthorized) {
       if (accountId) {
         try {
           const { refreshAccountToken } = await import("./playwright.ts");
           const refreshed = await refreshAccountToken(accountId);
           if (refreshed.success) {
-            return createQwenChatSession(headers, model, accountId, chatMode);
+            const { headers: freshHeaders } = await getQwenHeaders(false, accountId);
+            return createQwenChatSession(freshHeaders, model, accountId, chatMode);
           }
         } catch {}
       }

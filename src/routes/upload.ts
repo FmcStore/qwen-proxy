@@ -387,15 +387,18 @@ async function getSTSToken(
     }
     data = await response.json().catch(() => null);
   }
+  const codeLower = (data?.data?.code || data?.code || "").toLowerCase();
+  const detailsLower = (typeof data?.data?.details === "string" ? data.data.details : typeof data?.message === "string" ? data.message : "").toLowerCase();
   const is401 =
     data?.success === false &&
-    (data?.data?.code === "Unauthorized" ||
-      (typeof data?.data?.details === "string" &&
-        data.data.details.includes("401")));
+    (codeLower === "unauthorized" ||
+      detailsLower.includes("401") ||
+      detailsLower.includes("token has expired") ||
+      detailsLower.includes("unauthorized"));
 
   if (is401) {
     try {
-      const { refreshHeaders } = await import("../services/playwright.ts");
+      const { refreshAccountToken } = await import("../services/playwright.ts");
       const { getBasicHeaders } = await import("../services/auth-playwright.ts");
       const { loadAccounts } = await import("../core/accounts.ts");
       const resolvedId = accountId ?? loadAccounts()[0]?.id;
@@ -403,16 +406,18 @@ async function getSTSToken(
         console.warn(
           `[Upload] STS token 401 — refreshing session with re-auth and retrying...`,
         );
-        await refreshHeaders(resolvedId, undefined, true);
-        const fresh = await getBasicHeaders(resolvedId);
-        headers.cookie = fresh.cookie;
-        headers["user-agent"] = fresh.userAgent;
-        headers["bx-v"] = fresh.bxV;
-        if (fresh.bxUa) headers["bx-ua"] = fresh.bxUa;
-        if (fresh.bxUmidtoken) headers["bx-umidtoken"] = fresh.bxUmidtoken;
-        const retryRes = await doFetch(headers);
-        if (retryRes.ok) {
-          data = await retryRes.json().catch(() => null);
+        const refreshResult = await refreshAccountToken(resolvedId);
+        if (refreshResult.success) {
+          const fresh = await getBasicHeaders(resolvedId);
+          headers.cookie = fresh.cookie;
+          headers["user-agent"] = fresh.userAgent;
+          headers["bx-v"] = fresh.bxV;
+          if (fresh.bxUa) headers["bx-ua"] = fresh.bxUa;
+          if (fresh.bxUmidtoken) headers["bx-umidtoken"] = fresh.bxUmidtoken;
+          const retryRes = await doFetch(headers);
+          if (retryRes.ok) {
+            data = await retryRes.json().catch(() => null);
+          }
         }
       }
     } catch (refreshErr) {

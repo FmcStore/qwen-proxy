@@ -79,7 +79,8 @@ export function buildQwenRequestHeaders(
     "bx-v": opts.bxV || "2.5.37",
     source: "web",
     version: opts.version || getQwenWebVersion(),
-    timezone: opts.extra?.timezone || new Date().toString().split(" (")[0],
+    timezone: opts.extra?.timezone || opts.extra?.Timezone || new Date().toString().split(" (")[0],
+    Timezone: opts.extra?.Timezone || opts.extra?.timezone || new Date().toString().split(" (")[0],
     // Use the real browser client-hints when captured (anti-hardcoded); fall
     // back to the static fingerprint otherwise.
     "sec-ch-ua":

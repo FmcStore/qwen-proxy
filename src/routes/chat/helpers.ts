@@ -114,12 +114,40 @@ export function formatThinkingSummaryContent(delta: any): string {
 }
 
 /**
+ * Verified answer/content phases from Qwen Web:
+ * - "answer": standard text completions
+ * - "deep_research_answer", "ReportGeneration", "PdfMdGen": deep research & search modes
+ * - "image", "image_generation", "image_gen", "t2i": multimodal/image phases
+ */
+export const ANSWER_PHASES = new Set([
+  "answer",
+  "deep_research_answer",
+  "ReportGeneration",
+  "PdfMdGen",
+  "image",
+  "image_generation",
+  "image_gen",
+  "t2i",
+]);
+
+export function isAnswerPhase(phase: unknown): boolean {
+  return typeof phase === "string" && ANSWER_PHASES.has(phase);
+}
+
+/**
  * Matches thinking phases verified in upstream Qwen Web HAR:
  * - "thinking_summary": structured thinking in Qwen Max / Plus
  * - "think": incremental thinking deltas in Qwen Omni
+ * - "DeepThinking": deep thinking models
  */
+export const THINKING_PHASES = new Set([
+  "think",
+  "thinking_summary",
+  "DeepThinking",
+]);
+
 export function isThinkingPhase(phase: unknown): boolean {
-  return phase === "think" || phase === "thinking_summary";
+  return typeof phase === "string" && THINKING_PHASES.has(phase);
 }
 
 /**

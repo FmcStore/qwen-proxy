@@ -14,6 +14,7 @@ import {
 } from "../routes/chat/retry-policy.ts";
 import {
   getQwenErrorCode,
+  PersonalizationSyncError,
   QwenNetworkError,
   QwenUpstreamError,
   RetryableQwenStreamError,
@@ -141,8 +142,8 @@ test("classifyRetryAction: upstream CreateChatInvalidResponse with Unauthorized 
   assert.equal(action.retryable, true);
   assert.equal(action.switchAccount, true);
   assert.equal(action.forceNewChat, true);
-  assert.equal(action.accountCooldownReason, "AuthInitFailed");
-  assert.equal(action.accountCooldownMs, config.concurrency.initFailureCooldownMs);
+  assert.equal(action.accountCooldownReason, "AuthExpired");
+  assert.equal(action.accountCooldownMs, 0);
   assert.equal(action.reason, "account_initialization_failed");
 });
 
@@ -151,7 +152,8 @@ test("classifyRetryAction: upstream 401 details cools account and rotates", () =
   const action = classifyRetryAction(err);
   assert.equal(action.retryable, true);
   assert.equal(action.switchAccount, true);
-  assert.equal(action.accountCooldownReason, "AuthInitFailed");
+  assert.equal(action.accountCooldownReason, "AuthExpired");
+  assert.equal(action.accountCooldownMs, 0);
   assert.equal(action.reason, "account_initialization_failed");
 });
 
@@ -364,6 +366,28 @@ test("error classification keeps network and chat state out of rate limits", () 
   const chatResult = classifyError(chatInProgress);
   assert.equal(chatResult.statusCode, 502);
   assert.equal(chatResult.code, "upstream_unavailable");
+});
+
+test("classifyRetryAction: Token has expired sets zero cooldown (AuthExpired) to prevent pool lockout", () => {
+  const err = new Error("Qwen upstream error: unauthorized: Token has expired, please log in again..");
+  const action = classifyRetryAction(err);
+  assert.equal(action.retryable, true);
+  assert.equal(action.switchAccount, true);
+  assert.equal(action.forceNewChat, true);
+  assert.equal(action.accountCooldownReason, "AuthExpired");
+  assert.equal(action.accountCooldownMs, 0);
+  assert.equal(action.reason, "account_initialization_failed");
+});
+
+test("classifyRetryAction: PersonalizationSyncError sets zero cooldown to prevent pool lockout", () => {
+  const err = new PersonalizationSyncError("Personalization sync failed");
+  const action = classifyRetryAction(err);
+  assert.equal(action.retryable, true);
+  assert.equal(action.switchAccount, true);
+  assert.equal(action.forceNewChat, true);
+  assert.equal(action.accountCooldownReason, "PersonalizationFailed");
+  assert.equal(action.accountCooldownMs, 0);
+  assert.equal(action.reason, "personalization_sync_failed");
 });
 
 test("classifyRetryAction: chat not exist is not treated as quota", () => {

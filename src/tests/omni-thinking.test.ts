@@ -3,12 +3,14 @@ import assert from "node:assert";
 import {
   getIncrementalDelta,
   isThinkingPhase,
+  isAnswerPhase,
   extractThinkingContent,
 } from "../routes/chat/helpers.ts";
 
-test("isThinkingPhase matches strictly verified Qwen thinking phases (think, thinking_summary)", () => {
+test("isThinkingPhase matches strictly verified Qwen thinking phases (think, thinking_summary, DeepThinking)", () => {
   assert.strictEqual(isThinkingPhase("think"), true);
   assert.strictEqual(isThinkingPhase("thinking_summary"), true);
+  assert.strictEqual(isThinkingPhase("DeepThinking"), true);
 
   assert.strictEqual(isThinkingPhase("answer"), false);
   assert.strictEqual(isThinkingPhase("thinking"), false);
@@ -17,6 +19,24 @@ test("isThinkingPhase matches strictly verified Qwen thinking phases (think, thi
   assert.strictEqual(isThinkingPhase(""), false);
   assert.strictEqual(isThinkingPhase(null), false);
   assert.strictEqual(isThinkingPhase(undefined), false);
+});
+
+test("isAnswerPhase matches standard and extended Qwen answer phases", () => {
+  assert.strictEqual(isAnswerPhase("answer"), true);
+  assert.strictEqual(isAnswerPhase("deep_research_answer"), true);
+  assert.strictEqual(isAnswerPhase("ReportGeneration"), true);
+  assert.strictEqual(isAnswerPhase("PdfMdGen"), true);
+  assert.strictEqual(isAnswerPhase("image"), true);
+  assert.strictEqual(isAnswerPhase("image_generation"), true);
+  assert.strictEqual(isAnswerPhase("image_gen"), true);
+  assert.strictEqual(isAnswerPhase("t2i"), true);
+
+  assert.strictEqual(isAnswerPhase("think"), false);
+  assert.strictEqual(isAnswerPhase("thinking_summary"), false);
+  assert.strictEqual(isAnswerPhase("DeepThinking"), false);
+  assert.strictEqual(isAnswerPhase(""), false);
+  assert.strictEqual(isAnswerPhase(null), false);
+  assert.strictEqual(isAnswerPhase(undefined), false);
 });
 
 test("extractThinkingContent extracts both direct content and structured summary", () => {

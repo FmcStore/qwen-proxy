@@ -486,14 +486,14 @@ export function classifyRetryAction(
       switchAccount: true,
       forceNewChat: true,
       retryAfterMs: baseDelayMs,
-      accountCooldownMs: config.concurrency.initFailureCooldownMs,
+      accountCooldownMs: 0,
       accountCooldownReason: "PersonalizationFailed",
     });
   }
 
   // Upstream 401 / Unauthorized on chat creation or API requests:
-  // Account session is invalid or expired. Cool down account with AuthInitFailed so the
-  // proxy rotates to a valid account instead of looping endlessly on 503s.
+  // Access token expired (15m window). Rotate without locking into a 300s cooldown
+  // so the account can immediately be renewed via refresh_token.
   if (
     code === "createchatinvalidresponse" ||
     code === "createchatfailed" ||
@@ -510,8 +510,8 @@ export function classifyRetryAction(
       forceNewChat: true,
       retryWithFullPrompt: true,
       retryAfterMs: Math.min(baseDelayMs, 1_000),
-      accountCooldownMs: config.concurrency.initFailureCooldownMs,
-      accountCooldownReason: "AuthInitFailed",
+      accountCooldownMs: 0,
+      accountCooldownReason: "AuthExpired",
     });
   }
   // Specialized recoveries first (even if wrapped as RetryableQwenStreamError)

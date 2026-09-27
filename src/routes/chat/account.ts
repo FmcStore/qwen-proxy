@@ -1681,15 +1681,27 @@ async function tryCreateStreamWithRetry(
 		}
 
 		if (policy.reason === "account_initialization_failed") {
-			console.warn(
-				`⚠️  [Chat] Account initialization failed | ${currentAccountEmail} | cooldown=${Math.round((policy.accountCooldownMs ?? 0) / 1000)}s`,
-			);
-			markAccountFailed(currentAccountId);
-			markAccountRateLimited(
-				currentAccountId,
-				policy.accountCooldownMs,
-				policy.accountCooldownReason,
-			);
+			const cooldownMs = policy.accountCooldownMs ?? 0;
+			if (cooldownMs > 0) {
+				console.warn(
+					`⚠️  [Chat] Account initialization failed | ${currentAccountEmail} | cooldown=${Math.round(cooldownMs / 1000)}s`,
+				);
+				markAccountFailed(currentAccountId);
+				markAccountRateLimited(
+					currentAccountId,
+					cooldownMs,
+					policy.accountCooldownReason,
+				);
+			} else {
+				console.warn(
+					`⚠️  [Chat] Account auth expired/retryable | ${currentAccountEmail} | rotating without cooldown`,
+				);
+				if (policy.accountCooldownReason === "AuthExpired") {
+					import("../../services/playwright.ts")
+						.then(({ refreshAccountToken }) => refreshAccountToken(currentAccountId))
+						.catch(() => {});
+				}
+			}
 			return { success: false, error: err };
 		}
 
@@ -1712,7 +1724,7 @@ async function tryCreateStreamWithRetry(
 				console.warn(
 					`🔄 [Chat] Switching account after ${policy.reason} | ${currentAccountEmail} -> ${maskEmail(nextAccount.email)}`,
 				);
-				if (policy.accountCooldownMs || policy.accountCooldownReason) {
+				if ((policy.accountCooldownMs ?? 0) > 0) {
 					markAccountRateLimited(
 						currentAccountId,
 						policy.accountCooldownMs,

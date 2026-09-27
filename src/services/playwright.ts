@@ -2005,6 +2005,8 @@ export interface LoginAttemptResult {
   success: boolean;
   permanentFailure?: boolean;
   reason?: string;
+  token?: string;
+  refreshToken?: string;
 }
 
 export function classifyQwenAuthError(
@@ -2120,6 +2122,7 @@ async function loginToQwen(
             secChUaPlatform: cache.headers["sec-ch-ua-platform"] || undefined,
             version: cache.headers["version"] || undefined,
             tokenExpiresAt: exp || undefined,
+            refreshToken: apiResult.refreshToken,
             capturedAt: Date.now(),
           });
         }
@@ -2155,6 +2158,12 @@ async function loginToQwen(
           markAccountHeadersReady(accountId);
           const { saveAuthSession } = await import("../core/database.ts");
           const exp = parseJwtExpiry(tokenCookie.value);
+          let rTok = uiResult.refreshToken;
+          if (!rTok) {
+            try {
+              rTok = (await page.evaluate(() => localStorage.getItem("refresh_token") || "")) || undefined;
+            } catch {}
+          }
           saveAuthSession(accountId, {
             cookie: cookieStr,
             userAgent: cache.headers["user-agent"] || "",
@@ -2166,6 +2175,7 @@ async function loginToQwen(
             secChUaPlatform: cache.headers["sec-ch-ua-platform"] || undefined,
             version: cache.headers["version"] || undefined,
             tokenExpiresAt: exp || undefined,
+            refreshToken: rTok,
             capturedAt: Date.now(),
           });
         }
@@ -2384,7 +2394,7 @@ async function loginViaApi(
           )
           .catch(() => {});
         await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
-        return { success: true };
+        return { success: true, token, refreshToken };
       }
     }
 
@@ -2688,6 +2698,161 @@ async function loginViaUi(
     console.warn(`⚠️  [Playwright] UI login error: ${err?.message || err}`);
     return { success: false, reason: err?.message || String(err) };
   }
+}
+
+/**
+ * Silently refresh the short-lived access token (15m) using the 30-day refresh_token.
+ * Uses official in-page fetch matching Qwen Web /api/v2/auths/refresh verified in HAR.
+ */
+export async function refreshAccountToken(
+  accountId: string,
+): Promise<{ success: boolean; token?: string; error?: string }> {
+  const page = accountPages.get(accountId);
+  if (!page || page.isClosed()) {
+    return { success: false, error: "Account page not active" };
+  }
+
+  // 1. Get refresh token from SQLite session or localStorage
+  const { getValidAuthSession, saveAuthSession } = await import("../core/database.ts");
+  const session = getValidAuthSession(accountId);
+  let refreshToken = session?.refreshToken;
+
+  if (!refreshToken) {
+    try {
+      refreshToken =
+        (await page.evaluate(() => localStorage.getItem("refresh_token") || "")) ||
+        undefined;
+    } catch {}
+  }
+
+  // 2. If we have a refresh token, invoke the working refresh endpoint in-page
+  if (refreshToken) {
+    try {
+      const refreshResult = await page.evaluate(
+        async ({ rTok }) => {
+          try {
+            const response = await fetch("https://auth.qwen.ai/api/v2/auths/refresh", {
+              method: "GET",
+              credentials: "include",
+              headers: {
+                accept: "application/json, text/plain, */*",
+                source: "web",
+                version: "0.3.11",
+                "x-request-origin": "https://chat.qwen.ai",
+                timezone: new Date().toString().split(" (")[0],
+                authorization: `Bearer ${rTok}`,
+              },
+            });
+            const json = await response.json().catch(() => null);
+            return { ok: response.ok, status: response.status, data: json };
+          } catch (e: any) {
+            return { ok: false, error: e.message };
+          }
+        },
+        { rTok: refreshToken },
+      );
+
+      const json = refreshResult?.data;
+      if (json && json.success === true && json.data) {
+        const newAccessToken = json.data.access_token || json.data.token;
+        const newRefreshToken = json.data.refresh_token || refreshToken;
+
+        if (newAccessToken) {
+          // Update browser cookie and localStorage
+          await page.context().addCookies([
+            {
+              name: "token",
+              value: newAccessToken,
+              domain: ".qwen.ai",
+              path: "/",
+              expires: Math.floor(Date.now() / 1000) + 31536000,
+              httpOnly: false,
+              secure: true,
+              sameSite: "Lax",
+            },
+          ]);
+
+          await page
+            .evaluate(
+              ({ tok, rTok }) => {
+                try {
+                  localStorage.removeItem("qwen_token_logged_out_marker");
+                  localStorage.setItem("token", tok);
+                  localStorage.setItem("access_token", tok);
+                  if (rTok) localStorage.setItem("refresh_token", rTok);
+                  document.cookie = `token=${encodeURIComponent(tok)}; path=/; domain=.qwen.ai; max-age=31536000`;
+                } catch {}
+              },
+              { tok: newAccessToken, rTok: newRefreshToken },
+            )
+            .catch(() => {});
+
+          // Update memory cache
+          const liveCookies = await page.context().cookies();
+          const cookieStr = liveCookies.map((c) => `${c.name}=${c.value}`).join("; ");
+          const cache = getHeaderCache(accountId);
+          cache.headers.cookie = cookieStr;
+          cache.lastRefresh = Date.now();
+          markAccountHeadersReady(accountId);
+
+          // Update SQLite session with new tokens
+          saveAuthSession(accountId, {
+            cookie: cookieStr,
+            userAgent: cache.headers["user-agent"] || session?.userAgent || "",
+            bxV: cache.headers["bx-v"] || session?.bxV || "2.5.37",
+            bxUa: cache.headers["bx-ua"] || session?.bxUa || "",
+            bxUmidtoken: cache.headers["bx-umidtoken"] || session?.bxUmidtoken || "",
+            secChUa: cache.headers["sec-ch-ua"] || session?.secChUa,
+            secChUaMobile: cache.headers["sec-ch-ua-mobile"] || session?.secChUaMobile,
+            secChUaPlatform: cache.headers["sec-ch-ua-platform"] || session?.secChUaPlatform,
+            version: cache.headers["version"] || session?.version,
+            userId: session?.userId,
+            tokenExpiresAt: parseJwtExpiry(newAccessToken) || undefined,
+            refreshToken: newRefreshToken,
+            capturedAt: Date.now(),
+          });
+
+          return { success: true, token: newAccessToken };
+        }
+      }
+    } catch {}
+  }
+
+  // 3. Fallback: if refresh_token was invalid/absent or refresh failed, do clean API login
+  const { getAccountCredentials } = await import("../core/accounts.ts");
+  const creds = getAccountCredentials(accountId);
+  if (creds && creds.email && creds.password) {
+    const apiResult = await loginViaApi(page, creds.email, creds.password);
+    if (apiResult.success) {
+      const liveCookies = await page.context().cookies();
+      const tokenCookie = liveCookies.find((c) => c.name === "token");
+      if (tokenCookie) {
+        const cookieStr = liveCookies.map((c) => `${c.name}=${c.value}`).join("; ");
+        const cache = getHeaderCache(accountId);
+        cache.headers.cookie = cookieStr;
+        cache.lastRefresh = Date.now();
+        markAccountHeadersReady(accountId);
+        saveAuthSession(accountId, {
+          cookie: cookieStr,
+          userAgent: cache.headers["user-agent"] || session?.userAgent || "",
+          bxV: cache.headers["bx-v"] || session?.bxV || "2.5.37",
+          bxUa: cache.headers["bx-ua"] || session?.bxUa || "",
+          bxUmidtoken: cache.headers["bx-umidtoken"] || session?.bxUmidtoken || "",
+          secChUa: cache.headers["sec-ch-ua"] || session?.secChUa,
+          secChUaMobile: cache.headers["sec-ch-ua-mobile"] || session?.secChUaMobile,
+          secChUaPlatform: cache.headers["sec-ch-ua-platform"] || session?.secChUaPlatform,
+          version: cache.headers["version"] || session?.version,
+          userId: session?.userId,
+          tokenExpiresAt: parseJwtExpiry(tokenCookie.value) || undefined,
+          refreshToken: apiResult.refreshToken,
+          capturedAt: Date.now(),
+        });
+        return { success: true, token: tokenCookie.value };
+      }
+    }
+  }
+
+  return { success: false, error: "Could not refresh or re-authenticate token" };
 }
 
 // ─── Header Capture ───────────────────────────────────────────────────────────
@@ -3410,17 +3575,10 @@ async function refreshHeadersInternal(
       };
 
       if (forceReauth) {
-        // If the page is already logged in, do NOT execute destructive password re-login!
-        const alreadyIn = await isPageLoggedIn(page, 2000).catch(() => false);
-        if (alreadyIn) {
-          const liveCookies = await page.context().cookies();
-          if (liveCookies.some((c) => c.name === "token")) {
-            const cookieStr = liveCookies.map((c) => `${c.name}=${c.value}`).join("; ");
-            cache.headers.cookie = cookieStr;
-            cache.lastRefresh = Date.now();
-            markAccountHeadersReady(accountId);
-            return;
-          }
+        // Try silent token refresh first using the 30-day refresh_token or direct API signin!
+        const refreshed = await refreshAccountToken(accountId);
+        if (refreshed.success) {
+          return;
         }
         await executeReauth();
       } else {
@@ -4019,53 +4177,17 @@ export async function keepAlivePlaywrightAccount(
     const now = Date.now();
     const currentUrl = page.url();
 
-    // Proactive session check: if token expires within 2 minutes, refresh in-page silently
+    // Proactive session check: if token expires within 5 minutes, refresh in-page silently using refreshAccountToken
     const cookie = await getCookies(accountId);
-    if (cookie && isTokenExpiringSoon(cookie, 2)) {
-      try {
-        await page
-          .evaluate(async () => {
-            await fetch("https://auth.qwen.ai/api/v2/auths/refresh", {
-              method: "GET",
-              credentials: "include",
-            }).catch(() => {});
-            await fetch("/api/v1/auths/", {
-              method: "GET",
-              credentials: "include",
-            }).catch(() => {});
-          })
-          .catch(() => {});
-
-        const liveCookies = await page.context().cookies();
-        const tokenCookie = liveCookies.find((c) => c.name === "token");
-        if (tokenCookie) {
-          const cookieStr = liveCookies.map((c) => `${c.name}=${c.value}`).join("; ");
-          const cache = getHeaderCache(accountId);
-          cache.headers.cookie = cookieStr;
-          cache.lastRefresh = Date.now();
-          markAccountHeadersReady(accountId);
-          lastKeepAliveNavigation.set(accountId, now);
-          touchAccountActivity(accountId);
-          return true;
-        }
-      } catch {}
-
-      // If token refresh probe didn't restore cookies and the page is genuinely logged out:
-      const loggedIn = await isPageLoggedIn(page, 2000).catch(() => false);
-      if (!loggedIn) {
-        console.log(
-          `💓 [SessionKeeper] Account ${accountId} session expired; renewing session...`,
-        );
-        try {
-          await refreshHeadersInternal(accountId, config.timeouts.headers, true);
-          lastKeepAliveNavigation.set(accountId, now);
-          touchAccountActivity(accountId);
-          return true;
-        } catch (err) {
-          console.warn(
-            `[SessionKeeper] Proactive session renewal failed for ${accountId}: ${getErrorMessage(err)}`,
-          );
-        }
+    if (cookie && isTokenExpiringSoon(cookie, 5)) {
+      console.log(
+        `💓 [SessionKeeper] Account ${accountId} access token expiring soon (<5m); silently refreshing...`,
+      );
+      const res = await refreshAccountToken(accountId);
+      if (res.success) {
+        lastKeepAliveNavigation.set(accountId, now);
+        touchAccountActivity(accountId);
+        return true;
       }
     }
 

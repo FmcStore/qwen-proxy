@@ -929,16 +929,28 @@ export async function requestQwenTextInBrowser(
           // If 401 Unauthorized in browser, try silent in-page token refresh before giving up
           if (response.status === 401) {
             try {
-              const refreshRes = await fetch("https://auth.qwen.ai/api/v2/auths/refresh", {
-                method: "GET",
-                credentials: "include",
-                signal: AbortSignal.timeout(3000),
-              });
-              if (refreshRes.status === 200) {
+              const rTok = localStorage.getItem("refresh_token");
+              if (rTok) {
+                const refreshRes = await fetch("https://auth.qwen.ai/api/v2/auths/refresh", {
+                  method: "GET",
+                  credentials: "include",
+                  headers: {
+                    accept: "application/json, text/plain, */*",
+                    source: "web",
+                    version: "0.3.11",
+                    "x-request-origin": "https://chat.qwen.ai",
+                    timezone: new Date().toString().split(" (")[0],
+                    authorization: `Bearer ${rTok}`,
+                  },
+                  signal: AbortSignal.timeout(5000),
+                });
                 const refreshJson: any = await refreshRes.json().catch(() => null);
-                if (refreshJson && refreshJson.success === true && refreshJson.data?.token) {
-                  const freshTok = refreshJson.data.token;
+                const freshTok = refreshJson?.data?.access_token || refreshJson?.data?.token;
+                const nextRTok = refreshJson?.data?.refresh_token;
+                if (refreshJson?.success === true && freshTok) {
                   localStorage.setItem("token", freshTok);
+                  localStorage.setItem("access_token", freshTok);
+                  if (nextRTok) localStorage.setItem("refresh_token", nextRTok);
                   document.cookie = `token=${encodeURIComponent(freshTok)}; path=/; domain=.qwen.ai; max-age=31536000`;
                   if (headers["authorization"] || headers["Authorization"]) {
                     headers["authorization"] = `Bearer ${freshTok}`;
@@ -979,13 +991,30 @@ export async function requestQwenTextInBrowser(
   // Settings and personalization requests run as same-origin in-browser fetch
   // with appropriate Referer, keeping the page on the stable chat UI without
   // expensive page.goto navigations that can time out under load.
-  const response = await withQwenBrowserPage<BrowserTextResponse>(
+  let response = await withQwenBrowserPage<BrowserTextResponse>(
     accountId,
     evaluateRequest,
     undefined,
     options.timeoutMs,
     recoverOnTimeout,
   );
+
+  // If evaluateRequest still received 401, trigger outer token refresh and retry once
+  if (response.status === 401 && accountId) {
+    try {
+      const { refreshAccountToken } = await import("./playwright.ts");
+      const refreshed = await refreshAccountToken(accountId);
+      if (refreshed.success) {
+        response = await withQwenBrowserPage<BrowserTextResponse>(
+          accountId,
+          evaluateRequest,
+          undefined,
+          options.timeoutMs,
+          recoverOnTimeout,
+        );
+      }
+    } catch {}
+  }
 
   return new Response(response.raw, {
     status: response.status,
@@ -1714,7 +1743,11 @@ export async function syncQwenRequestPersonalization(
     );
     try {
       currentSettings = null;
-      const { headers: freshHeaders } = await getQwenHeaders(true, accountId, true);
+      const { refreshAccountToken } = await import("./playwright.ts");
+      if (accountId) {
+        await refreshAccountToken(accountId);
+      }
+      const { headers: freshHeaders } = await getQwenHeaders(false, accountId);
       requestHeaders = buildCapturedQwenHeaders(freshHeaders, {
         referer: qwenUrl("/settings/personalization"),
       });

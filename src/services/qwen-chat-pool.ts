@@ -77,6 +77,15 @@ async function createQwenChatSession(
       rawLower.includes("unauthorized") ||
       rawLower.includes("permission to access")
     ) {
+      if (accountId) {
+        try {
+          const { refreshAccountToken } = await import("./playwright.ts");
+          const refreshed = await refreshAccountToken(accountId);
+          if (refreshed.success) {
+            return createQwenChatSession(headers, model, accountId, chatMode);
+          }
+        } catch {}
+      }
       throw new QwenUpstreamError(
         `Qwen create chat unauthorized: ${raw.substring(0, 300)}`,
         "Unauthorized",

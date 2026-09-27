@@ -2463,12 +2463,28 @@ async function loginViaUi(
     // (supporting English, Portuguese, Spanish, Chinese) to reveal the standard email + password form.
     await clearVisibleChallenge(page);
 
+    const isPasswordInputPresent = async () => {
+      return (await page.locator('input[type="password"], input[name="password"]').count().catch(() => 0)) > 0;
+    };
+
     const revealPasswordMode = async () => {
-      // 1. Playwright button locator with multilingual matching (never use div, which matches #root)
+      // If already on /forget, navigate back to /auth
+      if (page.url().includes("/forget")) {
+        await page.goto(qwenUrl("/auth"), { waitUntil: "domcontentloaded", timeout: 10_000 }).catch(() => {});
+        await sleep(1000);
+      }
+
+      // If password input is already in DOM, do NOT click any switch buttons!
+      if (await isPasswordInputPresent()) return;
+
+      // 1. Playwright button locator with multilingual matching (strictly excluding "Esqueci a senha" / "Forgot password")
       const btn = page
         .locator("button")
         .filter({
-          hasText: /(?:log\s*in\s*with\s*(?:a\s*)?password|fazer\s*login\s*com\s*senha|entrar\s*com\s*(?:uma\s*)?senha|iniciar\s*sesi[oó]n\s*con\s*contrase[nñ]a|senha|password|contrase|密码)/i,
+          hasText: /(?:log\s*in\s*with\s*(?:a\s*)?password|fazer\s*login\s*com\s*senha|entrar\s*com\s*(?:uma\s*)?senha|iniciar\s*sesi[oó]n\s*con\s*contrase[nñ]a|密码登录)/i,
+        })
+        .filter({
+          hasNotText: /(?:esqueci|forgot|olvid|reset|recover)/i,
         })
         .first();
 
@@ -2477,7 +2493,9 @@ async function loginViaUi(
         await sleep(500);
       }
 
-      // 2. In-page evaluate fail-safe to trigger direct DOM click on the button/link
+      if (await isPasswordInputPresent()) return;
+
+      // 2. In-page evaluate fail-safe to trigger direct DOM click on the password button
       await page
         .evaluate(() => {
           try {
@@ -2485,8 +2503,8 @@ async function loginViaUi(
             for (const b of buttons) {
               const txt = ((b as HTMLElement).innerText || "").trim().toLowerCase();
               if (
-                (txt.includes("senha") || txt.includes("password") || txt.includes("contrase") || txt.includes("密码")) &&
-                !txt.includes("esqueci") && !txt.includes("forgot")
+                /(?:log\s*in\s*with\s*(?:a\s*)?password|fazer\s*login\s*com\s*senha|entrar\s*com\s*(?:uma\s*)?senha|iniciar\s*sesi[oó]n\s*con\s*contrase[nñ]a|密码登录)/i.test(txt) &&
+                !txt.includes("esqueci") && !txt.includes("forgot") && !txt.includes("olvid") && !txt.includes("reset")
               ) {
                 (b as HTMLElement).click();
                 return true;
@@ -2513,7 +2531,7 @@ async function loginViaUi(
     }
 
     // If password field is still not visible after typing email, trigger reveal again
-    if (!(await page.locator('input[type="password"], input[name="password"]').isVisible().catch(() => false))) {
+    if (!(await isPasswordInputPresent())) {
       await revealPasswordMode();
     }
 

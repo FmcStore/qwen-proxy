@@ -2413,11 +2413,28 @@ async function loginViaUi(
   password: string,
 ): Promise<LoginAttemptResult> {
   try {
-    await page.goto(qwenUrl("/auth"), {
-      waitUntil: "domcontentloaded",
-      timeout: config.timeouts.navigation,
-    });
-    await sleep(1500);
+    // 0. If the page is ALREADY logged in, avoid touching /auth altogether!
+    if (!page.url().includes("/auth") && (await isPageLoggedIn(page, 2000).catch(() => false))) {
+      return { success: true };
+    }
+
+    try {
+      await page.goto(qwenUrl("/auth"), {
+        waitUntil: "domcontentloaded",
+        timeout: Math.min(config.timeouts.navigation, 15_000),
+      });
+      await sleep(1000);
+    } catch (gotoErr: any) {
+      // If navigation was aborted because the page redirected to / (because already logged in):
+      if (!page.url().includes("/auth") && (await isPageLoggedIn(page, 3000).catch(() => false))) {
+        return { success: true };
+      }
+    }
+
+    // Check if redirect occurred after navigation
+    if (!page.url().includes("/auth") && (await isPageLoggedIn(page, 3000).catch(() => false))) {
+      return { success: true };
+    }
 
     // Wait for email input
     const emailSelector = [
@@ -2429,7 +2446,7 @@ async function loginViaUi(
     ].join(", ");
     try {
       await page.waitForSelector(emailSelector, {
-        timeout: Math.min(config.timeouts.page, 8_000),
+        timeout: Math.min(config.timeouts.page, 5_000),
       });
     } catch {
       if (!page.url().includes("/auth") && (await isPageLoggedIn(page, 3000))) {
@@ -2485,8 +2502,15 @@ async function loginViaUi(
     await revealPasswordMode();
 
     // Fill email
-    await page.fill(emailSelector, email);
-    await sleep(300);
+    try {
+      await page.fill(emailSelector, email, { timeout: 8_000 });
+      await sleep(300);
+    } catch {
+      if (!page.url().includes("/auth") && (await isPageLoggedIn(page, 3000))) {
+        return { success: true };
+      }
+      throw new Error(`Campo de e-mail não encontrado na tela de autenticação`);
+    }
 
     // If password field is still not visible after typing email, trigger reveal again
     if (!(await page.locator('input[type="password"], input[name="password"]').isVisible().catch(() => false))) {
@@ -2516,21 +2540,54 @@ async function loginViaUi(
     }
 
     // Fill password
-    await page.fill(passwordSelector, password);
-    await sleep(500);
+    try {
+      await page.fill(passwordSelector, password, { timeout: 8_000 });
+      await sleep(500);
+    } catch {
+      if (!page.url().includes("/auth") && (await isPageLoggedIn(page, 3000))) {
+        return { success: true };
+      }
+      throw new Error(`Campo de senha não encontrado na tela de autenticação`);
+    }
 
-    // Prefer clicking the submit button; fall back to pressing Enter.
-    // The button starts disabled and only enables once both fields are filled.
+    // Dispatch input/change/blur events so Ant Design / React enables the submit button
+    await page
+      .evaluate(() => {
+        try {
+          const emailEl = document.querySelector('input[name="email"], input[type="email"], input[type="text"]');
+          const passEl = document.querySelector('input[type="password"], input[name="password"]');
+          if (emailEl) {
+            emailEl.dispatchEvent(new Event("input", { bubbles: true }));
+            emailEl.dispatchEvent(new Event("change", { bubbles: true }));
+            emailEl.dispatchEvent(new Event("blur", { bubbles: true }));
+          }
+          if (passEl) {
+            passEl.dispatchEvent(new Event("input", { bubbles: true }));
+            passEl.dispatchEvent(new Event("change", { bubbles: true }));
+            passEl.dispatchEvent(new Event("blur", { bubbles: true }));
+          }
+        } catch {}
+      })
+      .catch(() => {});
+
+    // Prefer clicking the submit button; do NOT press Enter if disabled
     const submitSelector =
       'button.qwenchat-auth-pc-submit-button, button[type="submit"], button:has-text("Log in"), button:has-text("Sign in"), button:has-text("Fazer login"), button:has-text("Entrar"), button:has-text("Iniciar sesión"), button:has-text("登录")';
     const submitButton = page.locator(submitSelector).first();
     try {
       await page.waitForSelector('button[type="submit"]:not([disabled])', {
-        timeout: 5_000,
+        timeout: 4_000,
       });
       await submitButton.click();
     } catch {
-      await page.keyboard.press("Enter");
+      const isDisabled = await submitButton.isDisabled().catch(() => true);
+      if (!isDisabled) {
+        await submitButton.click({ force: true }).catch(() => {});
+      } else {
+        if (!page.url().includes("/auth") && (await isPageLoggedIn(page, 2000))) {
+          return { success: true };
+        }
+      }
     }
     // Post-submit verification loop: wait up to 15s for captcha, redirect, cookies, or errors
     const postSubmitDeadline = Date.now() + 15_000;
@@ -3335,6 +3392,18 @@ async function refreshHeadersInternal(
       };
 
       if (forceReauth) {
+        // If the page is already logged in, do NOT execute destructive password re-login!
+        const alreadyIn = await isPageLoggedIn(page, 2000).catch(() => false);
+        if (alreadyIn) {
+          const liveCookies = await page.context().cookies();
+          if (liveCookies.some((c) => c.name === "token")) {
+            const cookieStr = liveCookies.map((c) => `${c.name}=${c.value}`).join("; ");
+            cache.headers.cookie = cookieStr;
+            cache.lastRefresh = Date.now();
+            markAccountHeadersReady(accountId);
+            return;
+          }
+        }
         await executeReauth();
       } else {
         try {
@@ -3932,21 +4001,53 @@ export async function keepAlivePlaywrightAccount(
     const now = Date.now();
     const currentUrl = page.url();
 
-    // Proactive session check: if token expires within 45 minutes, refresh proactively
+    // Proactive session check: if token expires within 2 minutes, refresh in-page silently
     const cookie = await getCookies(accountId);
-    if (cookie && isTokenExpiringSoon(cookie, 45)) {
-      console.log(
-        `💓 [SessionKeeper] Account ${accountId} token expires within 45m; proactively renewing session...`,
-      );
+    if (cookie && isTokenExpiringSoon(cookie, 2)) {
       try {
-        await refreshHeadersInternal(accountId, config.timeouts.headers, true);
-        lastKeepAliveNavigation.set(accountId, now);
-        touchAccountActivity(accountId);
-        return true;
-      } catch (err) {
-        console.warn(
-          `[SessionKeeper] Proactive session renewal failed for ${accountId}: ${getErrorMessage(err)}`,
+        await page
+          .evaluate(async () => {
+            await fetch("https://auth.qwen.ai/api/v2/auths/refresh", {
+              method: "GET",
+              credentials: "include",
+            }).catch(() => {});
+            await fetch("/api/v1/auths/", {
+              method: "GET",
+              credentials: "include",
+            }).catch(() => {});
+          })
+          .catch(() => {});
+
+        const liveCookies = await page.context().cookies();
+        const tokenCookie = liveCookies.find((c) => c.name === "token");
+        if (tokenCookie) {
+          const cookieStr = liveCookies.map((c) => `${c.name}=${c.value}`).join("; ");
+          const cache = getHeaderCache(accountId);
+          cache.headers.cookie = cookieStr;
+          cache.lastRefresh = Date.now();
+          markAccountHeadersReady(accountId);
+          lastKeepAliveNavigation.set(accountId, now);
+          touchAccountActivity(accountId);
+          return true;
+        }
+      } catch {}
+
+      // If token refresh probe didn't restore cookies and the page is genuinely logged out:
+      const loggedIn = await isPageLoggedIn(page, 2000).catch(() => false);
+      if (!loggedIn) {
+        console.log(
+          `💓 [SessionKeeper] Account ${accountId} session expired; renewing session...`,
         );
+        try {
+          await refreshHeadersInternal(accountId, config.timeouts.headers, true);
+          lastKeepAliveNavigation.set(accountId, now);
+          touchAccountActivity(accountId);
+          return true;
+        } catch (err) {
+          console.warn(
+            `[SessionKeeper] Proactive session renewal failed for ${accountId}: ${getErrorMessage(err)}`,
+          );
+        }
       }
     }
 

@@ -2375,11 +2375,22 @@ async function loginViaUi(
     }
 
     // In Qwen Web, if the page opens on the default email OTP panel, click "Log in with a password"
-    // to reveal the standard email + password form.
+    // (supporting English, Portuguese, Spanish, Chinese) to reveal the standard email + password form.
+    await clearVisibleChallenge(page);
+
+    const findPasswordModeButton = () => {
+      return page
+        .locator('button, [role="button"], a, div')
+        .filter({
+          hasText: /(?:log\s*in\s*with\s*(?:a\s*)?password|fazer\s*login\s*com\s*senha|entrar\s*com\s*(?:uma\s*)?senha|iniciar\s*sesi[oó]n\s*con\s*contrase[nñ]a|密码登录)/i,
+        })
+        .first();
+    };
+
     try {
-      const pwdModeBtn = page.getByText(/Log in with a password/i).first();
-      if (await pwdModeBtn.isVisible({ timeout: 1500 }).catch(() => false)) {
-        await pwdModeBtn.click().catch(() => {});
+      const pwdModeBtn = findPasswordModeButton();
+      if (await pwdModeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await pwdModeBtn.click({ timeout: 2000 }).catch(() => {});
         await sleep(500);
       }
     } catch {}
@@ -2390,9 +2401,9 @@ async function loginViaUi(
 
     // If "Log in with a password" button appeared after typing email, click it
     try {
-      const pwdModeBtn = page.getByText(/Log in with a password/i).first();
-      if (await pwdModeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await pwdModeBtn.click().catch(() => {});
+      const pwdModeBtn = findPasswordModeButton();
+      if (await pwdModeBtn.isVisible({ timeout: 1500 }).catch(() => false)) {
+        await pwdModeBtn.click({ timeout: 2000 }).catch(() => {});
         await sleep(500);
       }
     } catch {}
@@ -2426,7 +2437,7 @@ async function loginViaUi(
     // Prefer clicking the submit button; fall back to pressing Enter.
     // The button starts disabled and only enables once both fields are filled.
     const submitSelector =
-      'button.qwenchat-auth-pc-submit-button, button[type="submit"], button:has-text("Log in"), button:has-text("Sign in")';
+      'button.qwenchat-auth-pc-submit-button, button[type="submit"], button:has-text("Log in"), button:has-text("Sign in"), button:has-text("Fazer login"), button:has-text("Entrar"), button:has-text("Iniciar sesión"), button:has-text("登录")';
     const submitButton = page.locator(submitSelector).first();
     try {
       await page.waitForSelector('button[type="submit"]:not([disabled])', {

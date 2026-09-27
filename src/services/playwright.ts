@@ -2163,8 +2163,9 @@ async function loginToQwen(
 
     if (attempt < maxAttempts) {
       const backoffMs = attempt * 5_000;
+      const failReason = uiResult.reason || apiResult.reason || "falha temporária";
       console.warn(
-        `⚠️  [Playwright] Login attempt ${attempt}/${maxAttempts} failed for ${maskEmail(email)} (${apiResult.reason || uiResult.reason || "falha temporária"}), retrying in ${backoffMs / 1000}s`,
+        `⚠️  [Playwright] Login attempt ${attempt}/${maxAttempts} failed for ${maskEmail(email)} (${failReason}), retrying in ${backoffMs / 1000}s`,
       );
       await sleep(backoffMs);
     }
@@ -2447,58 +2448,76 @@ async function loginViaUi(
     } catch {
       await page.keyboard.press("Enter");
     }
-    await sleep(3000);
+    // Post-submit verification loop: wait up to 15s for captcha, redirect, cookies, or errors
+    const postSubmitDeadline = Date.now() + 15_000;
+    while (Date.now() < postSubmitDeadline) {
+      if (page.isClosed()) break;
 
-    // If a slider puzzle captcha appeared after submit, solve it automatically
-    await solveBaxiaCaptcha(page, {
-      waitForMs: 2000,
-      maxAttempts: config.captcha.maxAttempts,
-      retryDelayMs: config.captcha.retryDelayMs,
-    }).catch(() => {});
+      // If a slider puzzle captcha appeared after submit, solve it automatically
+      if (config.captcha.enabled) {
+        await solveBaxiaCaptcha(page, {
+          waitForMs: 1500,
+          maxAttempts: config.captcha.maxAttempts,
+          retryDelayMs: config.captcha.retryDelayMs,
+        }).catch(() => {});
+      }
 
-    // Check if an OTP code verification screen appeared (e.g. 2FA / email verification code)
-    const codeSelector =
-      'input[placeholder*="code" i], input[placeholder*="código" i], input[name*="code" i]';
-    const codeInput = page.locator(codeSelector).first();
-    if (await codeInput.isVisible().catch(() => false)) {
-      return {
-        success: false,
-        reason: "Conta requer código de verificação enviado por e-mail (2FA/OTP)",
-      };
-    }
+      // Check for UI error elements in DOM (Ant Design errors, alerts, toasts)
+      const errorSelector = [
+        ".qwen-chat-v2-toast-text",
+        ".qwen-chat-v2-toast-content",
+        ".ant-form-item-explain-error",
+        ".ant-message-error",
+        ".ant-message-notice",
+        '[role="alert"]',
+        ".qwenchat-auth-error",
+        ".auth-error-message",
+      ].join(", ");
+      const errorEl = page.locator(errorSelector).first();
+      if (await errorEl.isVisible().catch(() => false)) {
+        const errorText = (await errorEl.innerText().catch(() => "")).trim();
+        if (errorText) {
+          const classified = classifyQwenAuthError(undefined, errorText);
+          return {
+            success: false,
+            permanentFailure: classified.isPermanent,
+            reason: `Formulário: ${classified.reason}`,
+          };
+        }
+      }
 
-    // Check for UI error elements in DOM (Ant Design errors, alerts, toasts)
-    const errorSelector = [
-      ".qwen-chat-v2-toast-text",
-      ".qwen-chat-v2-toast-content",
-      ".ant-form-item-explain-error",
-      ".ant-message-error",
-      ".ant-message-notice",
-      '[role="alert"]',
-      ".qwenchat-auth-error",
-      ".auth-error-message",
-    ].join(", ");
-    const errorEl = page.locator(errorSelector).first();
-    if (await errorEl.isVisible().catch(() => false)) {
-      const errorText = (await errorEl.innerText().catch(() => "")).trim();
-      if (errorText) {
-        const classified = classifyQwenAuthError(undefined, errorText);
+      // Check if an OTP code verification screen appeared (e.g. 2FA / email verification code)
+      const codeSelector =
+        'input[placeholder*="code" i], input[placeholder*="código" i], input[name*="code" i]';
+      const codeInput = page.locator(codeSelector).first();
+      if (await codeInput.isVisible().catch(() => false)) {
         return {
           success: false,
-          permanentFailure: classified.isPermanent,
-          reason: `Formulário: ${classified.reason}`,
+          reason: "Conta requer código de verificação enviado por e-mail (2FA/OTP)",
         };
       }
+
+      // Check if auth cookie 'token' appeared
+      try {
+        const liveCookies = await page.context().cookies();
+        if (liveCookies.some((c) => c.name === "token")) {
+          return { success: true };
+        }
+      } catch {}
+
+      // Check if page redirected away from /auth and is logged in
+      const currentUrl = page.url();
+      if (!currentUrl.includes("/auth") && !currentUrl.includes("/login")) {
+        if (await isPageLoggedIn(page, 3000)) {
+          return { success: true };
+        }
+      }
+
+      await sleep(1000);
     }
 
-    // Check if login was successful
-    const isLoggedIn = await isPageLoggedIn(page);
-
-    if (isLoggedIn) {
-      await page.goto(qwenUrl("/"), {
-        waitUntil: "domcontentloaded",
-        timeout: config.timeouts.navigation,
-      });
+    // Final check
+    if (await isPageLoggedIn(page, 3000)) {
       return { success: true };
     }
 

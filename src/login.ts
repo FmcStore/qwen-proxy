@@ -120,7 +120,7 @@ async function addAccountFlow() {
 
     const ok = await validateAccountLogin(
       { id: tempId, email: trimmedEmail, password: trimmedPassword },
-      config.playwright.headless,
+      false, // Visible browser so user can see and complete challenges if needed
       config.playwright.browser,
     );
 

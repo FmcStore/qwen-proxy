@@ -995,8 +995,29 @@ export function getStealthScript(profile: FingerprintProfile): string {
         const _toBlob = HTMLCanvasElement.prototype.toBlob;
         const _getImageData = CanvasRenderingContext2D.prototype.getImageData;
 
+        function isCaptchaCanvas(canvas) {
+          try {
+            if (!canvas) return false;
+            const id = (canvas.id || "").toLowerCase();
+            const cls = (canvas.className || "").toLowerCase();
+            return (
+              id.includes("baxia") ||
+              id.includes("nc_") ||
+              id.includes("captcha") ||
+              id.includes("punish") ||
+              cls.includes("baxia") ||
+              cls.includes("nc_") ||
+              cls.includes("captcha") ||
+              Boolean(canvas.closest?.("#baxia-dialog, #baxia-punish, [class*='baxia'], [class*='nc_'], .auth-layout"))
+            );
+          } catch(e) {
+            return false;
+          }
+        }
+
         function addNoise(canvas) {
           try {
+            if (isCaptchaCanvas(canvas)) return;
             const ctx = canvas.getContext('2d');
             if (!ctx) return;
             const style = ctx.fillStyle;
@@ -1020,6 +1041,9 @@ export function getStealthScript(profile: FingerprintProfile): string {
 
         CanvasRenderingContext2D.prototype.getImageData = function(x, y, w, h) {
           const imageData = _getImageData.apply(this, arguments);
+          if (isCaptchaCanvas(this.canvas)) {
+            return imageData;
+          }
           const data = imageData.data;
           const maxPixels = Math.min(data.length / 4, 2500);
           for (let i = 0; i < maxPixels * 4; i += 4) {
@@ -2206,41 +2230,65 @@ async function loginViaApi(
       .createHash("sha256")
       .update(password)
       .digest("hex");
-    const signinUrl = qwenUrl("/api/v2/auths/signin");
 
-    let signinSuccess = false;
-    let data: any = null;
-
-    if (page.request && typeof page.request.post === "function") {
-      try {
-        const response = await page.request.post(signinUrl, {
-          data: {
-            email,
-            password: hashedPassword,
-            login_type: "email",
-          },
-          headers: {
-            "content-type": "application/json",
-            accept: "application/json, text/plain, */*",
-            referer: qwenUrl("/auth"),
-            origin: qwenOrigin(),
-            source: "web",
-          },
-          timeout: 10_000,
-        });
-        data = await response.json().catch(() => null);
-        signinSuccess = Boolean(data && (data.success === true || data.token));
-      } catch {}
+    // Ensure the page is loaded at /auth so that same-site/CORS credentials and Baxia WAF headers are active
+    if (!page.url().includes("/auth")) {
+      await page.goto(qwenUrl("/auth"), {
+        waitUntil: "domcontentloaded",
+        timeout: config.timeouts.navigation,
+      }).catch(() => {});
+      await sleep(1000);
     }
 
-    if (!signinSuccess && !data) {
-      // Fallback to in-page evaluate fetch if page.request was unavailable
-      const requestId = crypto.randomUUID();
-      const evalRes = await page
+    const signinUrl = "https://auth.qwen.ai/api/v2/auths/signin";
+    const requestId = crypto.randomUUID();
+
+    const evalRes = await page
+      .evaluate(
+        async ({ email, password, signinUrl, requestId }) => {
+          try {
+            const response = await fetch(signinUrl, {
+              method: "POST",
+              signal: AbortSignal.timeout(15_000),
+              credentials: "include",
+              headers: {
+                accept: "application/json, text/plain, */*",
+                "content-type": "application/json",
+                source: "web",
+                version: "0.3.11",
+                "x-request-origin": "https://chat.qwen.ai",
+                timezone: new Date().toString().split(" (")[0],
+                "x-request-id": requestId,
+              },
+              body: JSON.stringify({ email, password }),
+            });
+            const json = await response.json().catch(() => null);
+            return { ok: response.ok, status: response.status, data: json };
+          } catch (e: any) {
+            return { ok: false, error: e.message };
+          }
+        },
+        { email, password: hashedPassword, signinUrl, requestId },
+      )
+      .catch(() => null);
+
+    let data: any = evalRes?.data;
+    let signinSuccess = Boolean(
+      data &&
+      (data.success === true ||
+        data.token ||
+        data.data?.access_token ||
+        data.data?.token),
+    );
+
+    // Fallback to legacy chat.qwen.ai endpoint if auth.qwen.ai did not succeed
+    if (!signinSuccess && !data?.data?.code) {
+      const fallbackUrl = qwenUrl("/api/v2/auths/signin");
+      const fallbackRes = await page
         .evaluate(
-          async ({ email, password, signinUrl, requestId }) => {
+          async ({ email, password, fallbackUrl, requestId }) => {
             try {
-              const response = await fetch(signinUrl, {
+              const response = await fetch(fallbackUrl, {
                 method: "POST",
                 signal: AbortSignal.timeout(10_000),
                 credentials: "include",
@@ -2248,10 +2296,11 @@ async function loginViaApi(
                   accept: "application/json, text/plain, */*",
                   "content-type": "application/json",
                   source: "web",
+                  version: "0.3.11",
                   timezone: new Date().toString().split(" (")[0],
                   "x-request-id": requestId,
                 },
-                body: JSON.stringify({ email, password, login_type: "email" }),
+                body: JSON.stringify({ email, password }),
               });
               const json = await response.json().catch(() => null);
               return { ok: response.ok, status: response.status, data: json };
@@ -2259,13 +2308,19 @@ async function loginViaApi(
               return { ok: false, error: e.message };
             }
           },
-          { email, password: hashedPassword, signinUrl, requestId },
+          { email, password: hashedPassword, fallbackUrl, requestId },
         )
         .catch(() => null);
 
-      if (evalRes?.data) {
-        data = evalRes.data;
-        signinSuccess = Boolean(data && (data.success === true || data.token));
+      if (fallbackRes?.data) {
+        data = fallbackRes.data;
+        signinSuccess = Boolean(
+          data &&
+          (data.success === true ||
+            data.token ||
+            data.data?.access_token ||
+            data.data?.token),
+        );
       }
     }
 
@@ -2281,7 +2336,14 @@ async function loginViaApi(
     }
 
     if (signinSuccess) {
-      const token = data?.data?.token || data?.token;
+      const token =
+        data?.data?.access_token ||
+        data?.data?.token ||
+        data?.access_token ||
+        data?.token;
+      const refreshToken =
+        data?.data?.refresh_token || data?.refresh_token;
+
       if (token) {
         try {
           await page.context().addCookies([
@@ -2308,13 +2370,18 @@ async function loginViaApi(
 
       if (token) {
         await page
-          .evaluate((tok) => {
-            try {
-              localStorage.removeItem("qwen_token_logged_out_marker");
-              localStorage.setItem("token", tok);
-              document.cookie = `token=${encodeURIComponent(tok)}; path=/; domain=.qwen.ai; max-age=31536000`;
-            } catch {}
-          }, token)
+          .evaluate(
+            ({ tok, rTok }) => {
+              try {
+                localStorage.removeItem("qwen_token_logged_out_marker");
+                localStorage.setItem("token", tok);
+                localStorage.setItem("access_token", tok);
+                if (rTok) localStorage.setItem("refresh_token", rTok);
+                document.cookie = `token=${encodeURIComponent(tok)}; path=/; domain=.qwen.ai; max-age=31536000`;
+              } catch {}
+            },
+            { tok: token, rTok: refreshToken },
+          )
           .catch(() => {});
         await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
         return { success: true };

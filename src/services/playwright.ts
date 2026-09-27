@@ -2379,35 +2379,52 @@ async function loginViaUi(
     // (supporting English, Portuguese, Spanish, Chinese) to reveal the standard email + password form.
     await clearVisibleChallenge(page);
 
-    const findPasswordModeButton = () => {
-      return page
-        .locator('button, [role="button"], a, div')
+    const revealPasswordMode = async () => {
+      // 1. Playwright button locator with multilingual matching (never use div, which matches #root)
+      const btn = page
+        .locator("button")
         .filter({
-          hasText: /(?:log\s*in\s*with\s*(?:a\s*)?password|fazer\s*login\s*com\s*senha|entrar\s*com\s*(?:uma\s*)?senha|iniciar\s*sesi[oó]n\s*con\s*contrase[nñ]a|密码登录)/i,
+          hasText: /(?:log\s*in\s*with\s*(?:a\s*)?password|fazer\s*login\s*com\s*senha|entrar\s*com\s*(?:uma\s*)?senha|iniciar\s*sesi[oó]n\s*con\s*contrase[nñ]a|senha|password|contrase|密码)/i,
         })
         .first();
-    };
 
-    try {
-      const pwdModeBtn = findPasswordModeButton();
-      if (await pwdModeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await pwdModeBtn.click({ timeout: 2000 }).catch(() => {});
+      if (await btn.isVisible({ timeout: 1500 }).catch(() => false)) {
+        await btn.click({ timeout: 2000 }).catch(() => {});
         await sleep(500);
       }
-    } catch {}
+
+      // 2. In-page evaluate fail-safe to trigger direct DOM click on the button/link
+      await page
+        .evaluate(() => {
+          try {
+            const buttons = Array.from(document.querySelectorAll("button, [role='button'], a"));
+            for (const b of buttons) {
+              const txt = ((b as HTMLElement).innerText || "").trim().toLowerCase();
+              if (
+                (txt.includes("senha") || txt.includes("password") || txt.includes("contrase") || txt.includes("密码")) &&
+                !txt.includes("esqueci") && !txt.includes("forgot")
+              ) {
+                (b as HTMLElement).click();
+                return true;
+              }
+            }
+          } catch {}
+          return false;
+        })
+        .catch(() => false);
+      await sleep(500);
+    };
+
+    await revealPasswordMode();
 
     // Fill email
     await page.fill(emailSelector, email);
     await sleep(300);
 
-    // If "Log in with a password" button appeared after typing email, click it
-    try {
-      const pwdModeBtn = findPasswordModeButton();
-      if (await pwdModeBtn.isVisible({ timeout: 1500 }).catch(() => false)) {
-        await pwdModeBtn.click({ timeout: 2000 }).catch(() => {});
-        await sleep(500);
-      }
-    } catch {}
+    // If password field is still not visible after typing email, trigger reveal again
+    if (!(await page.locator('input[type="password"], input[name="password"]').isVisible().catch(() => false))) {
+      await revealPasswordMode();
+    }
 
     // In Qwen Web, the password field is present on the same form.
     // NEVER press Enter after filling email alone, as Qwen interprets that

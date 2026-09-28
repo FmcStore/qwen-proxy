@@ -1,0 +1,53 @@
+# Railway-optimized build for QwenProxy
+# Base: Playwright jammy image (Node 22 LTS bundled + all Chromium system deps)
+FROM mcr.microsoft.com/playwright:v1.62.1-jammy
+
+# dumb-init  -> zombie reaping for Playwright child processes
+# gosu       -> safe privilege drop helper (kept available, not required to run)
+# build-essential/python3 -> compile native addons (better-sqlite3) on ARM64 & AMD64
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+     build-essential python3 dumb-init gosu curl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Avoid duplicate browser download inside npm install
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV NODE_ENV=production
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# --- dependencies layer (cached separately from source) ---------------------
+COPY package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+# --- Patchright patched stealth Chromium (matches container arch) ------------
+RUN npx patchright install --with-deps chromium \
+  && chmod -R a+rX /ms-playwright
+
+# --- application source ------------------------------------------------------
+COPY tsconfig.json ./
+COPY bin ./bin
+COPY src ./src
+
+# --- writable runtime dirs (mount Railway volume at /app/data) --------------
+RUN mkdir -p /app/data/db /app/data/qwen_profiles /tmp/playwright \
+  && chmod -R a+rwX /app /tmp/playwright
+
+VOLUME ["/app/data"]
+EXPOSE 7936
+
+# Railway injects PORT at runtime; the app reads PORT + HOST from env.
+# HOST must be 0.0.0.0 in a container and API_KEY becomes mandatory.
+ENV HOST=0.0.0.0
+ENV PORT=7936
+ENV PLAYWRIGHT_HEADLESS=true
+ENV LOG_LEVEL=warn
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+  CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
+
+# Runs as root on purpose: the Railway volume is mounted root-owned, and
+# better-sqlite3 + Playwright need a writable /app/data and /tmp/playwright.
+ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+CMD ["npx", "tsx", "src/index.ts"]

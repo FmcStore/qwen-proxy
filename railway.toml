@@ -1,0 +1,34 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.railway"
+
+# QwenProxy drives a real Chromium via Patchright: give it real CPU + RAM.
+# Chromium under 2 GB RAM gets OOM-killed mid-stream.
+[deploy]
+numReplicas = 1
+startCommand = "npx tsx src/index.ts"
+healthcheckPath = "/health"
+healthcheckTimeout = 180
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+# --- variables -----------------------------------------------------------------
+# Set these in the Railway dashboard (Shared Variables), NOT in this file.
+
+# [variables]
+# PORT                      -> do NOT set; Railway injects it
+# HOST                      -> "0.0.0.0" (set in the Dockerfile already)
+# API_KEY                   -> REQUIRED, any random string; the server refuses to
+#                               start on a non-loopback bind without it
+# QWEN_ACCOUNTS             -> "email1@gmail.com:pass1;email2@gmail.com:pass2"
+# CORS_ORIGIN               -> your UI origin if a web UI calls it
+# PLAYWRIGHT_HEADLESS       -> "true"
+# PLAYWRIGHT_MAX_ACTIVE_CONTEXTS -> "1"   (RAM saver)
+# LOG_LEVEL                 -> "info"
+
+# --- persistent volume ---------------------------------------------------------
+# Mounted at /app/data: holds the SQLite DB and browser session profiles.
+# Losing it means re-login for every account.
+#
+# [deploy]
+# ... plus, in the Railway UI: New -> Volume, mount path /app/data

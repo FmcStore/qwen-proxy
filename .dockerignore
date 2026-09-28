@@ -50,8 +50,7 @@ Thumbs.db
 # Temp analysis scripts
 .tmp-*
 
-# TypeScript config (not needed at runtime with tsx)
-tsconfig.json
+# TypeScript config is kept in the image context (tsx reads it at runtime)
 # Tests
 src/tests/
 src/benchmarks/

@@ -66,6 +66,7 @@ import { Mutex } from "../core/mutex.ts";
 import {
   markAccountHeadersReady,
   unmarkAccountHeadersReady,
+  isAccountHeadersReady,
   markAccountRateLimited,
 } from "../core/account-manager.ts";
 import { getAccountsByPriority } from "../core/account-priority.ts";

@@ -408,27 +408,6 @@ export async function isPageLoggedIn(
             }
           } catch {}
 
-          // Fallback cross-origin refresh probe
-          try {
-            const refreshRes = await fetch("https://auth.qwen.ai/api/v2/auths/refresh", {
-              method: "GET",
-              credentials: "include",
-              signal: AbortSignal.timeout(3000),
-            });
-            if (refreshRes.status === 200) {
-              const refreshJson: any = await refreshRes.json().catch(() => null);
-              if (refreshJson && refreshJson.success === false) {
-                const code = refreshJson.data?.code || refreshJson.code;
-                const details = String(refreshJson.data?.details || "");
-                if (code === "Unauthorized" || details.includes("revogado") || details.includes("revoked")) {
-                  return false;
-                }
-              }
-            } else if (refreshRes.status === 401 || refreshRes.status === 403) {
-              return false;
-            }
-          } catch {}
-
           // If an authenticated user object is confirmed with a real user identity,
           // the session is 100% valid and verified by upstream.
           return true;
@@ -1811,7 +1790,7 @@ export async function initPlaywrightForAccount(
         );
       }
 
-      if (!options.skipHeaderCapture) {
+      if (!options.skipHeaderCapture && !isAccountHeadersReady(account.id)) {
         (acctPage as any).__qwenChatHomeLoaded = true;
         await captureQwenHeaders(account.id);
       }
@@ -2224,7 +2203,7 @@ async function loginToQwen(
   );
   markAccountRateLimited(
     accountId,
-    24 * 3600 * 1000,
+    300 * 1000,
     "AuthFailed: All login methods exhausted",
   );
   return false;
@@ -2582,41 +2561,52 @@ async function loginViaUi(
     await page
       .evaluate(() => {
         try {
-          const emailEl = document.querySelector('input[name="email"], input[type="email"], input[type="text"]');
-          const passEl = document.querySelector('input[type="password"], input[name="password"]');
-          if (emailEl) {
-            emailEl.dispatchEvent(new Event("input", { bubbles: true }));
-            emailEl.dispatchEvent(new Event("change", { bubbles: true }));
-            emailEl.dispatchEvent(new Event("blur", { bubbles: true }));
-          }
-          if (passEl) {
-            passEl.dispatchEvent(new Event("input", { bubbles: true }));
-            passEl.dispatchEvent(new Event("change", { bubbles: true }));
-            passEl.dispatchEvent(new Event("blur", { bubbles: true }));
-          }
+          const emailEl = document.querySelector('input[name="email"], input[type="email"], input[type="text"]') as HTMLInputElement | null;
+          const passEl = document.querySelector('input[type="password"], input[name="password"]') as HTMLInputElement | null;
+          const setReactValue = (el: HTMLInputElement, val: string) => {
+            const proto = Object.getPrototypeOf(el);
+            const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+            if (setter) {
+              setter.call(el, val);
+            } else {
+              el.value = val;
+            }
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            el.dispatchEvent(new Event("blur", { bubbles: true }));
+          };
+          if (emailEl) setReactValue(emailEl, emailEl.value);
+          if (passEl) setReactValue(passEl, passEl.value);
         } catch {}
       })
       .catch(() => {});
 
-    // Prefer clicking the submit button; do NOT press Enter if disabled
+    await sleep(500);
+
+    // Multi-modal submit: DOM click, Playwright force click, and Enter press
     const submitSelector =
       'button.qwenchat-auth-pc-submit-button, button[type="submit"], button:has-text("Log in"), button:has-text("Sign in"), button:has-text("Fazer login"), button:has-text("Entrar"), button:has-text("Iniciar sesión"), button:has-text("登录")';
     const submitButton = page.locator(submitSelector).first();
-    try {
-      await page.waitForSelector('button[type="submit"]:not([disabled])', {
-        timeout: 4_000,
-      });
-      await submitButton.click();
-    } catch {
-      const isDisabled = await submitButton.isDisabled().catch(() => true);
-      if (!isDisabled) {
-        await submitButton.click({ force: true }).catch(() => {});
-      } else {
-        if (!page.url().includes("/auth") && (await isPageLoggedIn(page, 2000))) {
-          return { success: true };
+
+    await page.evaluate((sel) => {
+      try {
+        const btn = document.querySelector(sel) as HTMLButtonElement | null;
+        if (btn) {
+          btn.removeAttribute("disabled");
+          btn.classList.remove("ant-btn-disabled");
+          btn.click();
         }
+      } catch {}
+    }, submitSelector).catch(() => {});
+
+    try {
+      if (await submitButton.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await submitButton.click({ force: true, timeout: 2000 }).catch(() => {});
       }
-    }
+    } catch {}
+
+    const passInput = page.locator(passwordSelector).first();
+    await passInput.press("Enter", { timeout: 2000 }).catch(() => {});
     // Post-submit verification loop: wait up to 15s for captcha, redirect, cookies, or errors
     const postSubmitDeadline = Date.now() + 15_000;
     while (Date.now() < postSubmitDeadline) {

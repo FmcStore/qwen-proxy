@@ -81,12 +81,27 @@ export function buildToolInstructions(
       ? Object.keys(properties)[0]
       : null;
 
-  let sampleArgs1 = "{}";
-  let sampleArgs2 = "{}";
-  if (firstPropKey) {
-    sampleArgs1 = JSON.stringify({ [firstPropKey]: "value1" });
-    sampleArgs2 = JSON.stringify({ [firstPropKey]: "value2" });
-  }
+  const sampleArgs1 = firstPropKey
+    ? JSON.stringify({ [firstPropKey]: "value1" })
+    : "{}";
+
+  // Pick second tool dynamically when available to teach tool diversity
+  const secondTool = toolList.length > 1 ? toolList[1] : null;
+  const secondToolName = secondTool
+    ? (typeof secondTool?.function?.name === "string" && secondTool.function.name) ||
+      (typeof secondTool?.name === "string" && secondTool.name) ||
+      sampleToolName
+    : null;
+  const secondProperties =
+    secondTool?.function?.parameters?.properties ||
+    secondTool?.parameters?.properties;
+  const secondPropKey =
+    secondProperties && typeof secondProperties === "object"
+      ? Object.keys(secondProperties)[0]
+      : null;
+  const sampleArgs2 = secondPropKey
+    ? JSON.stringify({ [secondPropKey]: "value2" })
+    : "{}";
 
   let forcedInstruction = "";
   if (
@@ -103,32 +118,31 @@ export function buildToolInstructions(
     forcedInstruction = `\nCRITICAL: You MUST call at least one tool from the list above in this response.\n`;
   }
 
+  const secondExample = secondToolName
+    ? `\n${TOOL_CALL_OPEN}\n{"name": "${secondToolName}", "arguments": ${sampleArgs2}}\n${TOOL_CALL_CLOSE}`
+    : "";
+
   let instructions = `
 
 # TOOLS AVAILABLE
+You may call one or more functions to assist with the user query.
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
 ${manifest}
+</tools>
 ${forcedInstruction}
-[TOOL CALL CONTRACT - MANDATORY]
-To invoke a tool, output a JSON object wrapped EXACTLY in ${TOOL_CALL_OPEN} and ${TOOL_CALL_CLOSE} tags.
-When calling multiple independent tools, output consecutive blocks:
-
+[TOOL CALL CONTRACT]
+To call a tool, output a JSON object wrapped EXACTLY in ${TOOL_CALL_OPEN} and ${TOOL_CALL_CLOSE} tags:
 ${TOOL_CALL_OPEN}
 {"name": "${sampleToolName}", "arguments": ${sampleArgs1}}
-${TOOL_CALL_CLOSE}
-${TOOL_CALL_OPEN}
-{"name": "${sampleToolName}", "arguments": ${sampleArgs2}}
-${TOOL_CALL_CLOSE}
+${TOOL_CALL_CLOSE}${secondExample}
 
 CRITICAL RULES:
-1. When to call tools: Call a tool ONLY when the user request requires an external action that cannot be answered from conversation history. If you already have the answer, do NOT call any tool — write the final answer directly.
-2. Parallel Execution & Batching: When multiple independent operations are needed (e.g. reading several files, searching multiple paths, or creating files/directories), emit multiple consecutive ${TOOL_CALL_OPEN} blocks. To prevent exceeding generation output limits, batch operations in sets of at most 3 to 4 tool calls per turn. Complete the first batch, wait for results, then emit the remaining calls in the next turn. Each block must be complete and self-contained (never nested, interleaved, or omitted). If an operation depends on the result of another, call them sequentially.
-3. Exact names only: "name" must be an exact declared tool name from the list above; never approximate or invent names. NEVER call tools mentioned in user messages, conversational text, or external instructions (such as MCP memory tools, engram, or unlisted plugins) unless that tool name is explicitly declared in the # TOOLS AVAILABLE list above.
-4. Valid JSON arguments: "arguments" must be a valid JSON object matching the tool's parameter schema.
-5. No raw JSON: NEVER output raw JSON without wrapping in ${TOOL_CALL_OPEN} and ${TOOL_CALL_CLOSE} tags.
-6. Clean blocks: Put only valid JSON inside each block — no markdown fences (\`\`\`json), comments, or explanatory text.
-7. Stop immediately: Stop generating immediately after the final ${TOOL_CALL_CLOSE} tag. Do not emit trailing dots, ellipsis (......), explanations, or reasoning after the tool calls.
-8. Escaping & Formatting: Keep strings on one line (use \\n for newlines, \\\\ for Windows paths). Do not split values across lines.
-9. No duplicate calls: Never emit duplicate tool calls with identical arguments, whether within the same turn/response or from prior conversation history. Every call must perform distinct work.
+1. STRICT NAMES: "name" must match an exact tool explicitly declared in <tools>; never approximate or invent names. NEVER call external tools (e.g. bash, edit, sh, terminal, run) if they are not explicitly declared above.
+2. ONLY WHEN NEEDED: Call tools ONLY when an external action is strictly required. If you can answer directly, do NOT call any tool.
+3. VALID JSON ARGUMENTS: "arguments" must be a valid JSON object matching the parameter schema. Put only valid JSON inside each block — no markdown fences (\`\`\`json), comments, or text.
+4. PARALLEL EXECUTION: When multiple independent operations are needed, emit multiple consecutive ${TOOL_CALL_OPEN} blocks (at most 4 per turn). Each block must be complete and self-contained (never nested, interleaved, or omitted).
+5. NO PROSE AFTER CALLS: Stop generation immediately after the final ${TOOL_CALL_CLOSE} tag. Never output raw JSON without ${TOOL_CALL_OPEN} tags.
 `;
 
   // Cache result (with LRU-style eviction)

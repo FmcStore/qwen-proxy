@@ -1275,6 +1275,7 @@ export class StreamingToolParser {
   private currentOpenTag = TOOL_START_LITERAL;
   private currentCloseTag = TOOL_END;
   private emittedToolCallCount = 0;
+  private successfulToolCallsCount = 0;
   private pendingLeadIn = "";
   private tools: ToolDefinitionLike[] = [];
   private declaredToolNames: string[] = [];
@@ -1429,6 +1430,28 @@ export class StreamingToolParser {
       return candidate;
     }
 
+    // Common coding agent tool aliases (e.g. Cline/Roo Code vs SWE-bench/Claude)
+    const aliases: Record<string, string[]> = {
+      execute_command: ["bash", "sh", "terminal", "run_command", "shell", "exec_command", "cmd", "run_terminal_command"],
+      replace_in_file: ["edit", "edit_file", "str_replace", "replace", "patch_file", "modify_file", "str_replace_editor", "apply_diff"],
+      write_to_file: ["write", "create_file", "new_file", "save_file"],
+      read_file: ["read", "cat", "view_file", "open_file", "get_file"],
+      list_files: ["ls", "dir", "list_dir", "list_directory"],
+      search_files: ["grep", "find", "find_files", "search"],
+    };
+
+    const lower = name.toLowerCase();
+    for (const [declaredTarget, aliasList] of Object.entries(aliases)) {
+      if (this.declaredToolNameSet.has(declaredTarget) && aliasList.includes(lower)) {
+        logger.warn("[parser] Aliased tool name to declared tool", {
+          emittedToolName: name,
+          aliasedTo: declaredTarget,
+          declaredTools: this.declaredToolNames,
+        });
+        return declaredTarget;
+      }
+    }
+
     return null;
   }
 
@@ -1437,7 +1460,7 @@ export class StreamingToolParser {
     args: Record<string, unknown>,
   ): Record<string, unknown> {
     const toolProperties = this.getToolProperties(this.toolByName.get(name));
-    let normalized = args;
+    let normalized = { ...args };
     if (
       Object.keys(normalized).length === 1 &&
       Object.prototype.hasOwnProperty.call(normalized, "arguments") &&
@@ -1446,6 +1469,14 @@ export class StreamingToolParser {
       !Object.prototype.hasOwnProperty.call(toolProperties, "arguments")
     ) {
       normalized = (normalized as any).arguments as Record<string, unknown>;
+    }
+
+    // Parameter aliasing for common agent differences (e.g. cmd -> command, file_path -> path)
+    if (Object.prototype.hasOwnProperty.call(toolProperties, "command") && !normalized.command && normalized.cmd) {
+      normalized.command = normalized.cmd;
+    }
+    if (Object.prototype.hasOwnProperty.call(toolProperties, "path") && !normalized.path && normalized.file_path) {
+      normalized.path = normalized.file_path;
     }
 
     return this.coerceJsonLikeArgumentStrings(normalized);
@@ -1568,6 +1599,7 @@ export class StreamingToolParser {
       // or the arguments would be appended twice and corrupted.
       this.flushPendingToolCallDeltas(result);
       this.emittedToolCallCount++;
+      this.successfulToolCallsCount++;
       this.pendingLeadIn = "";
       incremental.startEmitted = false;
       incremental.disabled = true;
@@ -1577,6 +1609,7 @@ export class StreamingToolParser {
     this.flushPendingToolCallDeltas(result);
     result.toolCalls.push(tc);
     this.emittedToolCallCount++;
+    this.successfulToolCallsCount++;
     this.pendingLeadIn = "";
   }
 
@@ -2197,6 +2230,10 @@ export class StreamingToolParser {
 
   getEmittedToolCallCount(): number {
     return this.emittedToolCallCount;
+  }
+
+  getSuccessfulToolCallCount(): number {
+    return this.successfulToolCallsCount;
   }
 
   isInsideTool(): boolean {

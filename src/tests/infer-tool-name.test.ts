@@ -78,3 +78,91 @@ test("StreamingToolParser: recovers tool call with flattened command argument wi
     command: "git status",
   });
 });
+
+test("StreamingToolParser: aliases bash -> execute_command and maps cmd -> command when execute_command is declared", () => {
+  const clineTools = [
+    {
+      type: "function" as const,
+      function: {
+        name: "execute_command",
+        description: "Execute a CLI command",
+        parameters: {
+          type: "object",
+          properties: { command: { type: "string" } },
+          required: ["command"],
+        },
+      },
+    },
+    {
+      type: "function" as const,
+      function: {
+        name: "replace_in_file",
+        description: "Replace content in file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" }, diff: { type: "string" } },
+          required: ["path"],
+        },
+      },
+    },
+  ];
+
+  const parser = new StreamingToolParser(clineTools);
+  const chunk1 = '<tool_call>{"name": "bash", "arguments": {"cmd": "npm test"}}</tool_call>';
+  const res1 = parser.feed(chunk1);
+  parser.flush();
+
+  assert.strictEqual(res1.toolCalls.length, 1);
+  assert.strictEqual(res1.toolCalls[0].name, "execute_command", "Must alias bash to execute_command");
+  assert.strictEqual(res1.toolCalls[0].arguments.command, "npm test", "Must map cmd argument to command");
+  assert.strictEqual(parser.getSuccessfulToolCallCount(), 1);
+});
+
+test("StreamingToolParser: aliases edit -> replace_in_file and maps file_path -> path when replace_in_file is declared", () => {
+  const clineTools = [
+    {
+      type: "function" as const,
+      function: {
+        name: "replace_in_file",
+        description: "Replace content in file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" }, diff: { type: "string" } },
+          required: ["path"],
+        },
+      },
+    },
+  ];
+
+  const parser = new StreamingToolParser(clineTools);
+  const chunk = '<tool_call>{"name": "edit", "arguments": {"file_path": "src/index.ts", "diff": "..."}}</tool_call>';
+  const res = parser.feed(chunk);
+  parser.flush();
+
+  assert.strictEqual(res.toolCalls.length, 1);
+  assert.strictEqual(res.toolCalls[0].name, "replace_in_file", "Must alias edit to replace_in_file");
+  assert.strictEqual(res.toolCalls[0].arguments.path, "src/index.ts", "Must map file_path argument to path");
+  assert.strictEqual(parser.getSuccessfulToolCallCount(), 1);
+});
+
+test("StreamingToolParser: getSuccessfulToolCallCount remains 0 when tool is completely undeclared", () => {
+  const customTools = [
+    {
+      type: "function" as const,
+      function: {
+        name: "get_weather",
+        parameters: { type: "object", properties: { city: { type: "string" } } },
+      },
+    },
+  ];
+
+  const parser = new StreamingToolParser(customTools);
+  const chunk = '<tool_call>{"name": "totally_random_fake_tool", "arguments": {}}</tool_call>';
+  const res = parser.feed(chunk);
+  parser.flush();
+
+  assert.strictEqual(res.toolCalls.length, 0);
+  assert.strictEqual(parser.getSuccessfulToolCallCount(), 0, "Undeclared tool must NOT increment successful count");
+  assert.strictEqual(parser.getMalformedToolCalls().length, 1, "Must record as malformed/undeclared call");
+});
+

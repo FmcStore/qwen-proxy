@@ -2075,7 +2075,7 @@ export async function processStreamingResponse(
           if (!toolParser) break;
           const allToolsFailed =
             toolParser.getMalformedToolCalls().length > 0 &&
-            toolParser.getEmittedToolCallCount() === 0;
+            toolParser.getSuccessfulToolCallCount() === 0;
           if (!allToolsFailed) break;
 
           const malformedCalls = toolParser.getMalformedToolCalls();

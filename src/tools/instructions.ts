@@ -137,12 +137,11 @@ ${TOOL_CALL_OPEN}
 {"name": "${sampleToolName}", "arguments": ${sampleArgs1}}
 ${TOOL_CALL_CLOSE}${secondExample}
 
-CRITICAL RULES:
-1. STRICT NAMES: "name" must match an exact tool explicitly declared in <tools>; never approximate or invent names. NEVER call external tools (e.g. bash, edit, sh, terminal, run) if they are not explicitly declared above.
-2. ONLY WHEN NEEDED: Call tools ONLY when an external action is strictly required. If you can answer directly, do NOT call any tool.
-3. VALID JSON ARGUMENTS: "arguments" must be a valid JSON object matching the parameter schema. Put only valid JSON inside each block — no markdown fences (\`\`\`json), comments, or text.
-4. PARALLEL EXECUTION: When multiple independent operations are needed, emit multiple consecutive ${TOOL_CALL_OPEN} blocks (at most 4 per turn). Each block must be complete and self-contained (never nested, interleaved, or omitted).
-5. NO PROSE AFTER CALLS: Stop generation immediately after the final ${TOOL_CALL_CLOSE} tag. Never output raw JSON without ${TOOL_CALL_OPEN} tags.
+GUIDELINES:
+1. Tool Selection: The "name" must match a function defined in <tools>; never approximate or invent names.
+2. Arguments Format: "arguments" must be a valid JSON object matching the function's parameter schema. Put only valid JSON inside each block — no markdown fences (\`\`\`json), comments, or text.
+3. Parallel Execution: When multiple operations are needed, emit consecutive ${TOOL_CALL_OPEN} blocks (at most 4 per turn). Each block must be complete and self-contained (never nested, interleaved, or omitted).
+4. Direct Invocation: Stop generation after the tool call block so the tools can be executed. Never output raw JSON without ${TOOL_CALL_OPEN} tags.
 `;
 
   // Cache result (with LRU-style eviction)

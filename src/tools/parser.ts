@@ -1430,25 +1430,31 @@ export class StreamingToolParser {
       return candidate;
     }
 
-    // Common coding agent tool aliases (e.g. Cline/Roo Code vs SWE-bench/Claude)
-    const aliases: Record<string, string[]> = {
-      execute_command: ["bash", "sh", "terminal", "run_command", "shell", "exec_command", "cmd", "run_terminal_command"],
-      replace_in_file: ["edit", "edit_file", "str_replace", "replace", "patch_file", "modify_file", "str_replace_editor", "apply_diff"],
-      write_to_file: ["write", "create_file", "new_file", "save_file"],
-      read_file: ["read", "cat", "view_file", "open_file", "get_file"],
-      list_files: ["ls", "dir", "list_dir", "list_directory"],
-      search_files: ["grep", "find", "find_files", "search"],
-    };
+    // Bidirectional synonym groups covering all major coding agents (Claude, Codex, OpenCode, OMP, Cline, Roo, Zed, Aider)
+    const synonymGroups = [
+      ["execute_command", "bash", "sh", "terminal", "run_command", "shell", "exec_command", "cmd", "run_terminal_command"],
+      ["replace_in_file", "edit", "edit_file", "str_replace", "replace", "patch_file", "modify_file", "str_replace_editor", "apply_diff"],
+      ["write_to_file", "write", "create_file", "new_file", "save_file"],
+      ["read_file", "read", "cat", "view_file", "open_file", "get_file"],
+      ["list_files", "ls", "dir", "list_dir", "list_directory"],
+      ["search_files", "grep", "find", "find_files", "search"],
+    ];
 
     const lower = name.toLowerCase();
-    for (const [declaredTarget, aliasList] of Object.entries(aliases)) {
-      if (this.declaredToolNameSet.has(declaredTarget) && aliasList.includes(lower)) {
-        logger.warn("[parser] Aliased tool name to declared tool", {
-          emittedToolName: name,
-          aliasedTo: declaredTarget,
-          declaredTools: this.declaredToolNames,
-        });
-        return declaredTarget;
+    for (const group of synonymGroups) {
+      if (group.includes(lower)) {
+        // Find which tool in this synonym group is declared by the active client
+        const declaredMatch = this.declaredToolNames.find((declared) =>
+          group.includes(declared.toLowerCase()),
+        );
+        if (declaredMatch && declaredMatch.toLowerCase() !== lower) {
+          logger.warn("[parser] Aliased tool name to declared tool", {
+            emittedToolName: name,
+            aliasedTo: declaredMatch,
+            declaredTools: this.declaredToolNames,
+          });
+          return declaredMatch;
+        }
       }
     }
 

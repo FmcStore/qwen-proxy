@@ -166,3 +166,30 @@ test("StreamingToolParser: getSuccessfulToolCallCount remains 0 when tool is com
   assert.strictEqual(parser.getMalformedToolCalls().length, 1, "Must record as malformed/undeclared call");
 });
 
+test("StreamingToolParser: bidirectional aliasing maps execute_command -> Bash when Bash is declared", () => {
+  const claudeTools = [
+    {
+      type: "function" as const,
+      function: {
+        name: "Bash",
+        description: "Run shell command",
+        parameters: {
+          type: "object",
+          properties: { command: { type: "string" } },
+          required: ["command"],
+        },
+      },
+    },
+  ];
+
+  const parser = new StreamingToolParser(claudeTools);
+  const chunk = '<tool_call>{"name": "execute_command", "arguments": {"command": "ls -la"}}</tool_call>';
+  const res = parser.feed(chunk);
+  parser.flush();
+
+  assert.strictEqual(res.toolCalls.length, 1);
+  assert.strictEqual(res.toolCalls[0].name, "Bash", "Must map execute_command to Bash");
+  assert.strictEqual(res.toolCalls[0].arguments.command, "ls -la");
+  assert.strictEqual(parser.getSuccessfulToolCallCount(), 1);
+});
+

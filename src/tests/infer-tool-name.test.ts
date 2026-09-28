@@ -79,13 +79,13 @@ test("StreamingToolParser: recovers tool call with flattened command argument wi
   });
 });
 
-test("StreamingToolParser: aliases bash -> execute_command and maps cmd -> command when execute_command is declared", () => {
-  const clineTools = [
+test("StreamingToolParser: fuzzy matches tool name across casing and delimiters (bash -> Bash, read_file -> readFile)", () => {
+  const claudeTools = [
     {
       type: "function" as const,
       function: {
-        name: "execute_command",
-        description: "Execute a CLI command",
+        name: "Bash",
+        description: "Run shell command",
         parameters: {
           type: "object",
           properties: { command: { type: "string" } },
@@ -96,53 +96,32 @@ test("StreamingToolParser: aliases bash -> execute_command and maps cmd -> comma
     {
       type: "function" as const,
       function: {
-        name: "replace_in_file",
-        description: "Replace content in file",
+        name: "readFile",
+        description: "Read file",
         parameters: {
           type: "object",
-          properties: { path: { type: "string" }, diff: { type: "string" } },
+          properties: { path: { type: "string" } },
           required: ["path"],
         },
       },
     },
   ];
 
-  const parser = new StreamingToolParser(clineTools);
-  const chunk1 = '<tool_call>{"name": "bash", "arguments": {"cmd": "npm test"}}</tool_call>';
+  const parser = new StreamingToolParser(claudeTools);
+  const chunk1 = '<tool_call>{"name": "bash", "arguments": {"command": "npm test"}}</tool_call>';
   const res1 = parser.feed(chunk1);
   parser.flush();
 
   assert.strictEqual(res1.toolCalls.length, 1);
-  assert.strictEqual(res1.toolCalls[0].name, "execute_command", "Must alias bash to execute_command");
-  assert.strictEqual(res1.toolCalls[0].arguments.command, "npm test", "Must map cmd argument to command");
+  assert.strictEqual(res1.toolCalls[0].name, "Bash", "Must normalize casing to declared Bash");
   assert.strictEqual(parser.getSuccessfulToolCallCount(), 1);
-});
 
-test("StreamingToolParser: aliases edit -> replace_in_file and maps file_path -> path when replace_in_file is declared", () => {
-  const clineTools = [
-    {
-      type: "function" as const,
-      function: {
-        name: "replace_in_file",
-        description: "Replace content in file",
-        parameters: {
-          type: "object",
-          properties: { path: { type: "string" }, diff: { type: "string" } },
-          required: ["path"],
-        },
-      },
-    },
-  ];
-
-  const parser = new StreamingToolParser(clineTools);
-  const chunk = '<tool_call>{"name": "edit", "arguments": {"file_path": "src/index.ts", "diff": "..."}}</tool_call>';
-  const res = parser.feed(chunk);
+  const chunk2 = '<tool_call>{"name": "read_file", "arguments": {"path": "foo.txt"}}</tool_call>';
+  const res2 = parser.feed(chunk2);
   parser.flush();
 
-  assert.strictEqual(res.toolCalls.length, 1);
-  assert.strictEqual(res.toolCalls[0].name, "replace_in_file", "Must alias edit to replace_in_file");
-  assert.strictEqual(res.toolCalls[0].arguments.path, "src/index.ts", "Must map file_path argument to path");
-  assert.strictEqual(parser.getSuccessfulToolCallCount(), 1);
+  assert.strictEqual(res2.toolCalls.length, 1);
+  assert.strictEqual(res2.toolCalls[0].name, "readFile", "Must normalize snake_case to declared readFile");
 });
 
 test("StreamingToolParser: getSuccessfulToolCallCount remains 0 when tool is completely undeclared", () => {
@@ -164,32 +143,5 @@ test("StreamingToolParser: getSuccessfulToolCallCount remains 0 when tool is com
   assert.strictEqual(res.toolCalls.length, 0);
   assert.strictEqual(parser.getSuccessfulToolCallCount(), 0, "Undeclared tool must NOT increment successful count");
   assert.strictEqual(parser.getMalformedToolCalls().length, 1, "Must record as malformed/undeclared call");
-});
-
-test("StreamingToolParser: bidirectional aliasing maps execute_command -> Bash when Bash is declared", () => {
-  const claudeTools = [
-    {
-      type: "function" as const,
-      function: {
-        name: "Bash",
-        description: "Run shell command",
-        parameters: {
-          type: "object",
-          properties: { command: { type: "string" } },
-          required: ["command"],
-        },
-      },
-    },
-  ];
-
-  const parser = new StreamingToolParser(claudeTools);
-  const chunk = '<tool_call>{"name": "execute_command", "arguments": {"command": "ls -la"}}</tool_call>';
-  const res = parser.feed(chunk);
-  parser.flush();
-
-  assert.strictEqual(res.toolCalls.length, 1);
-  assert.strictEqual(res.toolCalls[0].name, "Bash", "Must map execute_command to Bash");
-  assert.strictEqual(res.toolCalls[0].arguments.command, "ls -la");
-  assert.strictEqual(parser.getSuccessfulToolCallCount(), 1);
 });
 

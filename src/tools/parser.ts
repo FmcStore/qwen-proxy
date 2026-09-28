@@ -1430,34 +1430,6 @@ export class StreamingToolParser {
       return candidate;
     }
 
-    // Bidirectional synonym groups covering all major coding agents (Claude, Codex, OpenCode, OMP, Cline, Roo, Zed, Aider)
-    const synonymGroups = [
-      ["execute_command", "bash", "sh", "terminal", "run_command", "shell", "exec_command", "cmd", "run_terminal_command"],
-      ["replace_in_file", "edit", "edit_file", "str_replace", "replace", "patch_file", "modify_file", "str_replace_editor", "apply_diff"],
-      ["write_to_file", "write", "create_file", "new_file", "save_file"],
-      ["read_file", "read", "cat", "view_file", "open_file", "get_file"],
-      ["list_files", "ls", "dir", "list_dir", "list_directory"],
-      ["search_files", "grep", "find", "find_files", "search"],
-    ];
-
-    const lower = name.toLowerCase();
-    for (const group of synonymGroups) {
-      if (group.includes(lower)) {
-        // Find which tool in this synonym group is declared by the active client
-        const declaredMatch = this.declaredToolNames.find((declared) =>
-          group.includes(declared.toLowerCase()),
-        );
-        if (declaredMatch && declaredMatch.toLowerCase() !== lower) {
-          logger.warn("[parser] Aliased tool name to declared tool", {
-            emittedToolName: name,
-            aliasedTo: declaredMatch,
-            declaredTools: this.declaredToolNames,
-          });
-          return declaredMatch;
-        }
-      }
-    }
-
     return null;
   }
 
@@ -1466,7 +1438,7 @@ export class StreamingToolParser {
     args: Record<string, unknown>,
   ): Record<string, unknown> {
     const toolProperties = this.getToolProperties(this.toolByName.get(name));
-    let normalized = { ...args };
+    let normalized = args;
     if (
       Object.keys(normalized).length === 1 &&
       Object.prototype.hasOwnProperty.call(normalized, "arguments") &&
@@ -1475,14 +1447,6 @@ export class StreamingToolParser {
       !Object.prototype.hasOwnProperty.call(toolProperties, "arguments")
     ) {
       normalized = (normalized as any).arguments as Record<string, unknown>;
-    }
-
-    // Parameter aliasing for common agent differences (e.g. cmd -> command, file_path -> path)
-    if (Object.prototype.hasOwnProperty.call(toolProperties, "command") && !normalized.command && normalized.cmd) {
-      normalized.command = normalized.cmd;
-    }
-    if (Object.prototype.hasOwnProperty.call(toolProperties, "path") && !normalized.path && normalized.file_path) {
-      normalized.path = normalized.file_path;
     }
 
     return this.coerceJsonLikeArgumentStrings(normalized);

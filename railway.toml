@@ -21,14 +21,19 @@ restartPolicyMaxRetries = 5
 # API_KEY                   -> REQUIRED, any random string; the server refuses to
 #                               start on a non-loopback bind without it
 # QWEN_ACCOUNTS             -> "email1@gmail.com:pass1;email2@gmail.com:pass2"
+# QWEN_DATA_DIR             -> already /app/data via Dockerfile; only override if
+#                               you move the volume mount path
 # CORS_ORIGIN               -> your UI origin if a web UI calls it
 # PLAYWRIGHT_HEADLESS       -> "true"
 # PLAYWRIGHT_MAX_ACTIVE_CONTEXTS -> "1"   (RAM saver)
 # LOG_LEVEL                 -> "info"
 
 # --- persistent volume ---------------------------------------------------------
-# Mounted at /app/data: holds the SQLite DB and browser session profiles.
-# Losing it means re-login for every account.
+# Attach it in the Railway UI/CLI: New -> Volume, mount path /app/data
+#   railway volume add --mount-path /app/data
+# It holds the SQLite DB, the AES master key and the Chromium session profiles.
+# Losing it means re-login for every account, so attach it BEFORE first deploy.
 #
-# [deploy]
-# ... plus, in the Railway UI: New -> Volume, mount path /app/data
+# The Dockerfile pins QWEN_DATA_DIR=/app/data to match this mount point. If you
+# change the mount path, change that ENV too or the app will keep writing to the
+# ephemeral container filesystem.

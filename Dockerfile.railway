@@ -30,11 +30,13 @@ COPY tsconfig.json ./
 COPY bin ./bin
 COPY src ./src
 
-# --- writable runtime dirs (mount Railway volume at /app/data) --------------
+# --- writable runtime dirs ---------------------------------------------------
+# No VOLUME instruction: Railway rejects it (volumes are attached as mounts
+# from the dashboard/CLI, never declared in the image). /app/data is still
+# created here so a fresh container without a volume attached boots fine.
 RUN mkdir -p /app/data/db /app/data/qwen_profiles /tmp/playwright \
   && chmod -R a+rwX /app /tmp/playwright
 
-VOLUME ["/app/data"]
 EXPOSE 7936
 
 # Railway injects PORT at runtime; the app reads PORT + HOST from env.
@@ -43,6 +45,13 @@ ENV HOST=0.0.0.0
 ENV PORT=7936
 ENV PLAYWRIGHT_HEADLESS=true
 ENV LOG_LEVEL=warn
+
+# Pin every persistent artifact (SQLite DB, AES key, Chromium profiles) to the
+# Railway volume mount point. Without this the app resolves paths via
+# resolveDataDir() in src/core/paths.ts and falls back to
+# $XDG_DATA_HOME/qwenproxy -> ~/.local/share/qwenproxy, which lives on the
+# ephemeral container filesystem and is wiped on every redeploy.
+ENV QWEN_DATA_DIR=/app/data
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
   CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
